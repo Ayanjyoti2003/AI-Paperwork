@@ -15,18 +15,19 @@ from app.tools.documents import (
     read_document,
     search_documents,
 )
-from app.tools.requirements import get_workflow_requirements
+from app.tools.requirements import discover_workflow, get_workflow_requirements
 from app.tools.verification import verify_requirements
 
 logger = logging.getLogger(__name__)
 
-# All tools available to the agent
+# All tools available to the agent (7 core tools)
 ALL_TOOLS = [
+    discover_workflow,
+    get_workflow_requirements,
     list_documents,
     search_documents,
     read_document,
     extract_document_facts,
-    get_workflow_requirements,
     verify_requirements,
 ]
 
@@ -46,10 +47,10 @@ def _create_model():
     if provider == "openai":
         api_key = os.environ.get("OPENAI_API_KEY", "")
         if not api_key or api_key.startswith("your-"):
-            print("\n[ERROR] OPENAI_API_KEY is not set or is a placeholder.")
-            print("   Set it in your .env file or as an environment variable.")
-            print("   Example: OPENAI_API_KEY=sk-...")
-            sys.exit(1)
+            raise ValueError(
+                "OPENAI_API_KEY is not set or is a placeholder. "
+                "Set it in your .env file or as an environment variable."
+            )
 
         from strands.models.openai import OpenAIModel
 
@@ -67,10 +68,10 @@ def _create_model():
     elif provider == "anthropic":
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key or api_key.startswith("your-"):
-            print("\n[ERROR] ANTHROPIC_API_KEY is not set or is a placeholder.")
-            print("   Set it in your .env file or as an environment variable.")
-            print("   Example: ANTHROPIC_API_KEY=sk-ant-...")
-            sys.exit(1)
+            raise ValueError(
+                "ANTHROPIC_API_KEY is not set or is a placeholder. "
+                "Set it in your .env file or as an environment variable."
+            )
 
         from strands.models.anthropic import AnthropicModel
 
@@ -87,19 +88,58 @@ def _create_model():
         return model
 
     else:
-        print(f"\n[ERROR] Unsupported MODEL_PROVIDER: {provider}")
-        print("   Supported values: openai, anthropic")
-        sys.exit(1)
+        raise ValueError(
+            f"Unsupported MODEL_PROVIDER: {provider}. Supported values: openai, anthropic"
+        )
 
 
-def create_agent() -> Agent:
-    """Create and return the configured Paperwork Agent."""
-    model = _create_model()
+def create_agent(
+    model=None,
+    structured_output_model: type | None = None,
+) -> Agent:
+    """Create and return the configured Paperwork Agent.
+
+    Args:
+        model: Optional custom Model instance. If not provided, creates provider from env.
+        structured_output_model: Optional Pydantic model for default structured output.
+    """
+    if model is None:
+        model = _create_model()
 
     agent = Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
         tools=ALL_TOOLS,
+        structured_output_model=structured_output_model,
     )
 
     return agent
+
+
+def assess_paperwork(
+    goal: str,
+    agent: Agent | None = None,
+):
+    """Run the paperwork agent on a goal and return the validated ReadinessAssessment.
+
+    Uses the current Strands SDK structured output mechanism (structured_output_model).
+
+    Args:
+        goal: The user's paperwork goal or instructions.
+        agent: Optional existing Agent instance.
+
+    Returns:
+        ReadinessAssessment: Validated Pydantic structured output model.
+    """
+    from app.schemas import ReadinessAssessment
+
+    if agent is None:
+        agent = create_agent()
+
+    result = agent(goal, structured_output_model=ReadinessAssessment)
+    if getattr(result, "structured_output", None) is not None:
+        return result.structured_output
+
+    raise RuntimeError(
+        "Agent execution completed but did not produce a validated ReadinessAssessment structured output."
+    )

@@ -74,10 +74,14 @@ def _get_file_metadata(path: Path) -> dict:
 
 @tool
 def list_documents() -> str:
-    """List all documents currently available in the data/documents directory.
+    """List all documents currently available in the user's local documents store.
 
-    Returns a JSON-formatted list of documents with their IDs, filenames,
-    file types, sizes, and modification timestamps.
+    Use this tool early in a workflow to discover what files the user has provided
+    before searching or reading.
+
+    Returns:
+        JSON string containing a list of documents with their stable document_id,
+        filename, file_type, size_bytes, and modification timestamp.
     """
     import json
 
@@ -101,13 +105,17 @@ def list_documents() -> str:
 
 @tool
 def search_documents(query: str) -> str:
-    """Search locally available documents for information relevant to a natural-language query.
+    """Search locally available documents for information relevant to a requirement.
 
-    Uses normalized keyword matching with simple relevance scoring. Returns matching
-    documents with relevant snippets and scores.
+    Use this to locate specific evidence needed for requirements (e.g., 'utility bill address',
+    'degree graduation certificate', 'national identity card') without reading every file blindly.
 
     Args:
-        query: A natural-language search query (e.g., 'date of birth', 'address proof').
+        query: Natural-language search query describing the needed evidence or document type.
+
+    Returns:
+        JSON string containing matching documents ranked by relevance score, with snippets
+        highlighting where the terms were found.
     """
     import json
 
@@ -175,12 +183,16 @@ def search_documents(query: str) -> str:
 
 @tool
 def read_document(document_id: str) -> str:
-    """Read the full contents of a document identified by its document_id.
+    """Read the full text content of a single document identified by its document_id.
 
-    Returns the document metadata and extracted text content.
+    Use this only on promising documents identified via search_documents or list_documents
+    when detailed context or full document inspection is required.
 
     Args:
         document_id: The stable document identifier (from list_documents or search_documents).
+
+    Returns:
+        JSON string containing document metadata and extracted text content.
     """
     import json
 
@@ -211,17 +223,18 @@ def read_document(document_id: str) -> str:
 
 @tool
 def extract_document_facts(document_id: str, requested_fields: str) -> str:
-    """Extract specific factual fields from a document.
+    """Extract specific factual fields from a document with exact provenance.
 
-    Searches the document text for evidence of the requested fields using
-    pattern matching and keyword detection. Returns structured facts with
-    provenance (source document, evidence snippet, confidence).
-
-    The LLM agent should interpret and refine these extractions as needed.
+    Use this after identifying a relevant document to pull structured fields
+    (e.g., 'full_name,date_of_birth,address,nationality,id_number').
+    Returns structured facts with source_document ID, confidence, and verbatim evidence snippets.
 
     Args:
-        document_id: The document to extract facts from.
-        requested_fields: Comma-separated list of fields to look for (e.g., 'full_name,date_of_birth,address').
+        document_id: The stable document identifier to extract facts from.
+        requested_fields: Comma-separated field names (e.g. 'full_name,date_of_birth') or list of field names.
+
+    Returns:
+        JSON string containing the list of extracted facts with provenance.
     """
     import json
 
@@ -245,7 +258,12 @@ def extract_document_facts(document_id: str, requested_fields: str) -> str:
             "detail": content,
         })
 
-    fields = [f.strip() for f in requested_fields.split(",") if f.strip()]
+    if isinstance(requested_fields, list):
+        fields = [str(f).strip() for f in requested_fields if str(f).strip()]
+    elif isinstance(requested_fields, str):
+        fields = [f.strip() for f in requested_fields.split(",") if f.strip()]
+    else:
+        fields = [str(requested_fields).strip()]
     facts = []
 
     for field in fields:

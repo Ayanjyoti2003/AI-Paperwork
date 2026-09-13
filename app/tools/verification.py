@@ -13,17 +13,23 @@ WORKFLOWS_DIR = _PROJECT_ROOT / "data" / "workflows"
 
 @tool
 def verify_requirements(workflow_id: str, evidence_json: str) -> str:
-    """Verify whether collected evidence satisfies the requirements of a workflow.
+    """Authoritative deterministic verification of collected evidence against workflow requirements.
 
-    Performs deterministic checks to classify each requirement as satisfied, missing,
-    conflict, or uncertain. Detects factual conflicts across documents.
+    Performs deterministic rule checks to classify each requirement as satisfied, missing,
+    conflict, or uncertain. Detects cross-document factual conflicts and calculates completion.
+
+    Use this tool after extracting facts across documents to obtain the authoritative
+    verification status before producing the final assessment.
 
     Args:
-        workflow_id: The workflow to verify against (e.g., 'example_application').
-        evidence_json: A JSON string containing a list of extracted facts. Each fact
-            should have: field, value, source_document, confidence, evidence_snippet.
-            Example: [{"field": "full_name", "value": "Jane Doe", "source_document": "abc123",
-                       "confidence": "high", "evidence_snippet": "Name: Jane Doe"}]
+        workflow_id: The workflow ID to verify against (e.g., 'example_application').
+        evidence_json: A JSON string, list of fact dicts, or dict with extracted facts. Each fact
+            should include: field, value, source_document, confidence, evidence_snippet.
+
+    Returns:
+        JSON string containing the verification assessment with ready (bool), completion_percentage,
+        categorized requirement checks (satisfied, missing, conflicts, uncertainties),
+        and actionable recommended_next_actions.
     """
     # Load workflow
     workflow_file = WORKFLOWS_DIR / f"{workflow_id}.json"
@@ -36,12 +42,25 @@ def verify_requirements(workflow_id: str, evidence_json: str) -> str:
         return json.dumps({"error": f"Failed to load workflow: {e}"})
 
     # Parse evidence
-    try:
-        evidence = json.loads(evidence_json)
-        if not isinstance(evidence, list):
-            return json.dumps({"error": "evidence_json must be a JSON array of facts"})
-    except json.JSONDecodeError as e:
-        return json.dumps({"error": f"Invalid evidence JSON: {e}"})
+    if isinstance(evidence_json, list):
+        evidence = evidence_json
+    elif isinstance(evidence_json, dict):
+        evidence = evidence_json.get("evidence", [evidence_json])
+    elif isinstance(evidence_json, str):
+        try:
+            parsed = json.loads(evidence_json)
+            if isinstance(parsed, list):
+                evidence = parsed
+            elif isinstance(parsed, dict) and "evidence" in parsed:
+                evidence = parsed["evidence"]
+            elif isinstance(parsed, dict):
+                evidence = [parsed]
+            else:
+                return json.dumps({"error": "evidence_json must be a JSON array of facts"})
+        except json.JSONDecodeError as e:
+            return json.dumps({"error": f"Invalid evidence JSON: {e}"})
+    else:
+        return json.dumps({"error": "evidence_json must be a JSON array of facts or a list"})
 
     requirements = workflow.get("requirements", [])
     checks = []
@@ -67,15 +86,32 @@ def verify_requirements(workflow_id: str, evidence_json: str) -> str:
                     matching_evidence.append(fact)
                     break
 
+        accepted_types = req.get("accepted_evidence_types", [])
+        types_hint = ", ".join(t.replace("_", " ") for t in accepted_types) if accepted_types else "supporting documentation"
+        validation_hint = req.get("validation_hints", "")
+
         if not matching_evidence:
             # No evidence at all
+            if required:
+                note_text = (
+                    f"{req_name} is required but no supporting document was found in the available documents. "
+                    f"Please provide an acceptable document ({types_hint})."
+                )
+            else:
+                note_text = (
+                    f"{req_name} is optional and no supporting document was found in the available documents. "
+                    f"Accepted formats: {types_hint}."
+                )
+            if validation_hint:
+                note_text += f" Note: {validation_hint}"
+
             checks.append({
                 "requirement_id": req_id,
                 "requirement_name": req_name,
                 "status": "missing",
                 "evidence": [],
                 "conflicts": [],
-                "notes": f"No evidence found for required fields: {relevant_fields}",
+                "notes": note_text,
             })
             continue
 
@@ -109,17 +145,20 @@ def verify_requirements(workflow_id: str, evidence_json: str) -> str:
 
         if conflicts:
             status = "conflict"
-            notes = f"Conflicting values found for: {[c['field'] for c in conflicts]}"
+            notes = (
+                f"Conflicting values found across documents for: {[c['field'] for c in conflicts]}. "
+                f"Discrepancy must be clarified or corrected before submission."
+            )
         elif has_high_confidence:
             status = "satisfied"
             satisfied_count += 1
             notes = None
         elif has_value:
             status = "uncertain"
-            notes = "Evidence found but confidence is not high"
+            notes = f"Evidence found but confidence is not high ({types_hint})"
         else:
             status = "missing"
-            notes = "Fields referenced but no values extracted"
+            notes = f"Field referenced but no reliable value extracted. Please provide {types_hint}."
 
         checks.append({
             "requirement_id": req_id,
@@ -143,12 +182,15 @@ def verify_requirements(workflow_id: str, evidence_json: str) -> str:
     # Generate recommended actions
     actions = []
     for c in missing:
-        actions.append(f"Provide document(s) for: {c['requirement_name']}")
+        req_item = next((r for r in requirements if r["id"] == c["requirement_id"]), {})
+        req_types = req_item.get("accepted_evidence_types", [])
+        types_str = f" (accepted: {', '.join(t.replace('_', ' ') for t in req_types)})" if req_types else ""
+        actions.append(f"Provide supporting document for {c['requirement_name']}{types_str}")
     for c in conflict_checks:
         fields = [conf["field"] for conf in c["conflicts"]]
-        actions.append(f"Resolve conflicting values in: {c['requirement_name']} (fields: {fields})")
+        actions.append(f"Resolve conflicting values for {', '.join(fields)} in {c['requirement_name']}")
     for c in uncertain:
-        actions.append(f"Verify/clarify evidence for: {c['requirement_name']}")
+        actions.append(f"Verify and clarify evidence for: {c['requirement_name']}")
 
     assessment = {
         "workflow_id": workflow_id,

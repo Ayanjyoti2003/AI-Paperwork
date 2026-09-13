@@ -60,6 +60,10 @@ class Requirement(BaseModel):
         default_factory=list,
         description="Factual fields to look for (e.g., 'full_name', 'date_of_birth')",
     )
+    validation_hints: Optional[str] = Field(
+        default=None,
+        description="Human/agent guidance for validating this requirement (e.g. freshness, issuing body)",
+    )
 
 
 class Workflow(BaseModel):
@@ -69,6 +73,30 @@ class Workflow(BaseModel):
     workflow_name: str
     description: str
     requirements: list[Requirement]
+
+
+class WorkflowDiscoveryResult(BaseModel):
+    """Result of attempting to discover a matching workflow for a user goal."""
+
+    status: str = Field(description="'found' if a workflow was matched, 'workflow_not_found' otherwise")
+    workflow_id: Optional[str] = Field(default=None, description="Matching workflow ID")
+    workflow_name: Optional[str] = Field(default=None, description="Human-readable workflow name")
+    confidence: float = Field(default=0.0, description="Match confidence score between 0.0 and 1.0")
+    reason: str = Field(default="", description="Explanation of why this workflow was matched or why search failed")
+    available_workflows: list[dict[str, str]] = Field(
+        default_factory=list, description="List of available workflow IDs and names if not found"
+    )
+
+
+# --- Evidence Schemas ---
+
+class EvidenceBundle(BaseModel):
+    """Structured collection of facts gathered during a paperwork verification workflow."""
+
+    workflow_id: str = Field(description="The workflow ID this evidence is gathered for")
+    facts: list[DocumentFact] = Field(default_factory=list, description="All extracted facts with provenance")
+    source_documents: list[str] = Field(default_factory=list, description="List of source document IDs or filenames")
+    extraction_notes: Optional[str] = Field(default=None, description="Observations or notes regarding the extraction")
 
 
 # --- Verification Schemas ---

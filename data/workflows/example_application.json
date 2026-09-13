@@ -9,7 +9,8 @@
             "description": "A valid government-issued identity document (passport, national ID card, or driver's license)",
             "required": true,
             "accepted_evidence_types": ["national_id", "passport", "drivers_license"],
-            "relevant_fields": ["full_name", "date_of_birth", "nationality", "id_number"]
+            "relevant_fields": ["full_name", "date_of_birth", "nationality", "id_number"],
+            "validation_hints": "Must be a valid, unexpired government document showing full legal name, ID number, and date of birth."
         },
         {
             "id": "req_address",
@@ -17,7 +18,8 @@
             "description": "Recent utility bill, bank statement, or official letter showing current residential address (within last 3 months)",
             "required": true,
             "accepted_evidence_types": ["utility_bill", "bank_statement", "official_letter"],
-            "relevant_fields": ["address"]
+            "relevant_fields": ["address"],
+            "validation_hints": "Must be dated within the last 3 months and clearly match the applicant's residential address."
         },
         {
             "id": "req_dob",
@@ -25,7 +27,8 @@
             "description": "Date of birth must be verifiable from at least one official document",
             "required": true,
             "accepted_evidence_types": ["national_id", "passport", "birth_certificate"],
-            "relevant_fields": ["date_of_birth"]
+            "relevant_fields": ["date_of_birth"],
+            "validation_hints": "Date of birth must match across all submitted documents without discrepancy."
         },
         {
             "id": "req_photo",
@@ -33,7 +36,8 @@
             "description": "A recent passport-size color photograph (taken within last 6 months)",
             "required": true,
             "accepted_evidence_types": ["photograph"],
-            "relevant_fields": ["photograph"]
+            "relevant_fields": ["photograph"],
+            "validation_hints": "Must be a recent passport-sized color photo taken within the last 6 months."
         },
         {
             "id": "req_education",
@@ -41,7 +45,8 @@
             "description": "Highest educational qualification certificate or transcript",
             "required": false,
             "accepted_evidence_types": ["degree_certificate", "transcript", "diploma"],
-            "relevant_fields": ["qualification", "institution"]
+            "relevant_fields": ["qualification", "institution"],
+            "validation_hints": "Must show graduation degree title and granting institution seal/signature."
         },
         {
             "id": "req_employment",
@@ -49,7 +54,8 @@
             "description": "Letter from current or most recent employer confirming employment status",
             "required": true,
             "accepted_evidence_types": ["employment_letter", "pay_stub", "contract"],
-            "relevant_fields": ["employer", "position", "employment_date"]
+            "relevant_fields": ["employer", "position", "employment_date"],
+            "validation_hints": "Must be signed by current or former employer, confirming company name, role, and tenure."
         }
     ]
 }

@@ -180,6 +180,45 @@ class TestRequirementLoading:
             assert "name" in req
             assert "required" in req
             assert "relevant_fields" in req
+            assert "validation_hints" in req
+
+
+class TestWorkflowDiscovery:
+    """Tests for the discover_workflow tool."""
+
+    def test_discover_workflow_natural_language(self):
+        from app.tools.requirements import discover_workflow
+
+        result = discover_workflow._tool_func(user_goal="I want to complete the example application.")
+        data = json.loads(result)
+        assert data["status"] == "found"
+        assert data["workflow_id"] == "example_application"
+        assert data["confidence"] > 0.5
+        assert "reason" in data
+
+    def test_discover_workflow_exact_id(self):
+        from app.tools.requirements import discover_workflow
+
+        result = discover_workflow._tool_func(user_goal="example_application")
+        data = json.loads(result)
+        assert data["status"] == "found"
+        assert data["workflow_id"] == "example_application"
+
+    def test_discover_workflow_not_found(self):
+        from app.tools.requirements import discover_workflow
+
+        result = discover_workflow._tool_func(user_goal="renew commercial spaceship captain license")
+        data = json.loads(result)
+        assert data["status"] == "workflow_not_found"
+        assert "available_workflows" in data
+        assert len(data["available_workflows"]) > 0
+
+    def test_discover_workflow_empty_query(self):
+        from app.tools.requirements import discover_workflow
+
+        result = discover_workflow._tool_func(user_goal="")
+        data = json.loads(result)
+        assert data["status"] == "workflow_not_found"
 
 
 class TestConflictDetection:

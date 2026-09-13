@@ -47,14 +47,21 @@ def setup_logging():
 def print_banner():
     """Print a startup banner."""
     print("\n" + "=" * 60)
-    print("  [PAPERWORK AGENT] - Phase 1")
-    print("  Administrative Document Verification Assistant")
+    print("  [PAPERWORK AGENT] - Phase 2")
+    print("  Intelligent Paperwork Workflow Assistant")
     print("=" * 60)
 
     provider = os.environ.get("MODEL_PROVIDER", "openai")
     model_id = os.environ.get("MODEL_ID", "(default)")
     print(f"\n  Provider:  {provider}")
     print(f"  Model:     {model_id}")
+
+    workflows_dir = Path(__file__).parent / "data" / "workflows"
+    if workflows_dir.exists():
+        wf_count = sum(1 for f in workflows_dir.glob("*.json") if f.is_file())
+        print(f"  Workflows: {wf_count} workflow(s) in data/workflows/")
+    else:
+        print("  Workflows: [!] data/workflows/ not found")
 
     docs_dir = Path(__file__).parent / "data" / "documents"
     if docs_dir.exists():
@@ -104,30 +111,75 @@ def main():
         print("\nThinking...\n")
 
         try:
-            # Try with structured output for readiness assessments
-            result = agent(user_input)
+            # Check if this is an assessment request or general prompt
+            is_assessment_intent = any(
+                kw in user_input.lower()
+                for kw in [
+                    "assess", "verify", "check", "ready", "complete",
+                    "application", "paperwork", "prepare", "workflow", "example"
+                ]
+            )
 
-            # Print the agent's response text
-            print("\n" + "-" * 40)
-            print("Agent Response:")
-            print("-" * 40)
+            if is_assessment_intent:
+                # Use current Strands SDK structured output API
+                result = agent(user_input, structured_output_model=ReadinessAssessment)
+            else:
+                result = agent(user_input)
 
-            # The result object has the text output
-            if hasattr(result, 'message') and result.message:
-                # Extract text from the message
-                if isinstance(result.message, dict) and 'content' in result.message:
-                    for block in result.message['content']:
-                        if isinstance(block, dict) and block.get('type') == 'text':
-                            print(block['text'])
+            # Display structured assessment if returned
+            if getattr(result, "structured_output", None) is not None:
+                assessment: ReadinessAssessment = result.structured_output
+                print("\n" + "=" * 60)
+                print("  [STRUCTURED READINESS ASSESSMENT]")
+                print("=" * 60)
+                print(f"  Workflow:    {assessment.workflow_name} ({assessment.workflow_id})")
+                print(f"  Status:      {'READY FOR SUBMISSION' if assessment.ready else 'NOT READY'}")
+                print(f"  Completion:  {assessment.completion_percentage}%")
+
+                if assessment.satisfied_requirements:
+                    print("\n  Satisfied Requirements:")
+                    for req in assessment.satisfied_requirements:
+                        print(f"    [OK] {req.requirement_name}")
+
+                if assessment.missing_requirements:
+                    print("\n  Missing Requirements:")
+                    for req in assessment.missing_requirements:
+                        notes = f": {req.notes}" if req.notes else ""
+                        print(f"    [MISSING] {req.requirement_name}{notes}")
+
+                if assessment.conflicts:
+                    print("\n  Detected Conflicts:")
+                    for req in assessment.conflicts:
+                        print(f"    [CONFLICT] {req.requirement_name}")
+                        for conf in req.conflicts:
+                            print(f"      Field '{conf.field}':")
+                            for val in conf.values:
+                                print(f"        - {val.get('value')} (doc: {val.get('source_document')})")
+
+                if assessment.recommended_next_actions:
+                    print("\n  Recommended Next Actions:")
+                    for i, action in enumerate(assessment.recommended_next_actions, 1):
+                        print(f"    {i}. {action}")
+                print("=" * 60)
+
+            # Print agent's message/thoughts if available
+            if hasattr(result, "message") and result.message:
+                print("\n" + "-" * 40)
+                print("Agent Explanation:")
+                print("-" * 40)
+                if isinstance(result.message, dict) and "content" in result.message:
+                    for block in result.message["content"]:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            print(block["text"])
                 elif isinstance(result.message, str):
                     print(result.message)
                 else:
-                    print(str(result))
-            else:
+                    print(str(result.message))
+            elif getattr(result, "structured_output", None) is None:
                 print(str(result))
 
         except Exception as e:
-            print(f"\n❌ Error: {e}")
+            print(f"\n[ERROR] {e}")
             logging.getLogger(__name__).exception("Agent error")
 
         print()
