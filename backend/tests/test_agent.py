@@ -19,7 +19,14 @@ from pydantic import BaseModel
 from strands import Agent
 from strands.models import Model
 
-from app.agent import ALL_TOOLS, create_agent, assess_paperwork
+from app.agent import (
+    ALL_TOOLS,
+    ModelStatus,
+    SafeAgentObservabilityHook,
+    assess_paperwork,
+    create_agent,
+    get_model_status,
+)
 from app.prompts import SYSTEM_PROMPT
 from app.schemas import (
     ConflictDetail,
@@ -208,3 +215,148 @@ class TestStructuredOutputCompatibility:
         restored = ReadinessAssessment.model_validate_json(json_data)
         assert restored.workflow_id == assessment.workflow_id
         assert restored.ready == assessment.ready
+
+
+class TestObservabilityAndModelStatus:
+    """Tests for Phase 3 model credential evaluation, observability hooks, and logging safety."""
+
+    def test_model_status_no_credentials_empty(self):
+        with patch.dict(os.environ, {"MODEL_PROVIDER": "openai", "OPENAI_API_KEY": ""}, clear=False):
+            status, msg = get_model_status()
+            assert status == ModelStatus.NO_CREDENTIALS
+            assert "not set or is an obvious placeholder" in msg
+
+    def test_model_status_no_credentials_placeholder(self):
+        with patch.dict(
+            os.environ,
+            {"MODEL_PROVIDER": "openai", "OPENAI_API_KEY": "your-openai-api-key-here"},
+            clear=False,
+        ):
+            status, msg = get_model_status()
+            assert status == ModelStatus.NO_CREDENTIALS
+
+    def test_model_status_no_credentials_anthropic_placeholder(self):
+        with patch.dict(
+            os.environ,
+            {"MODEL_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": "your-anthropic-api-key-here"},
+            clear=False,
+        ):
+            status, msg = get_model_status()
+            assert status == ModelStatus.NO_CREDENTIALS
+
+    def test_model_status_invalid_provider(self):
+        with patch.dict(os.environ, {"MODEL_PROVIDER": "unsupported_bedrock"}, clear=False):
+            status, msg = get_model_status()
+            assert status == ModelStatus.INVALID_PROVIDER
+            assert "Unsupported MODEL_PROVIDER" in msg
+
+    def test_model_status_live_ready_openai(self):
+        with patch.dict(
+            os.environ,
+            {"MODEL_PROVIDER": "openai", "OPENAI_API_KEY": "sk-proj-testkey123456789"},
+            clear=False,
+        ):
+            status, msg = get_model_status()
+            assert status == ModelStatus.LIVE_READY
+            assert "OpenAI credential configured" in msg
+            assert "sk-proj-testkey123456789" not in msg
+
+    def test_model_status_live_ready_anthropic(self):
+        with patch.dict(
+            os.environ,
+            {"MODEL_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": "sk-ant-testkey123456789"},
+            clear=False,
+        ):
+            status, msg = get_model_status()
+            assert status == ModelStatus.LIVE_READY
+            assert "Anthropic credential configured" in msg
+            assert "sk-ant-testkey123456789" not in msg
+
+    def test_observability_hook_registration_public_api(self):
+        """Constructs an Agent with SafeAgentObservabilityHook using public SDK API and verifies success."""
+        hook = SafeAgentObservabilityHook()
+        agent = create_agent(model=DummyModel(), hooks=[hook])
+        assert isinstance(agent, Agent)
+
+    def test_observability_hook_lifecycle_and_safety(self, caplog):
+        """Directly invokes hook lifecycle methods and verifies log format and strict data safety."""
+        import logging
+        test_logger = logging.getLogger("test.observability")
+        hook = SafeAgentObservabilityHook(logger_instance=test_logger)
+
+        class MockAgent:
+            pass
+
+        dummy_agent = MockAgent()
+
+        from strands.hooks import (
+            AfterInvocationEvent,
+            AfterToolCallEvent,
+            BeforeInvocationEvent,
+            BeforeToolCallEvent,
+        )
+
+        with caplog.at_level(logging.INFO, logger="test.observability"):
+            # 1. Start invocation
+            start_event = BeforeInvocationEvent(agent=dummy_agent)
+            hook.on_invocation_start(start_event)
+
+            # 2. Tool call with simulated parameters containing sensitive data
+            call_event = BeforeToolCallEvent(
+                agent=dummy_agent,
+                selected_tool=None,
+                tool_use={
+                    "name": "discover_workflow",
+                    "toolUseId": "tool_1",
+                    "input": {
+                        "user_goal": "I want to apply for citizenship with secret password: 12345",
+                        "api_key": "sk-leak-test",
+                        "document_text": "Confidential government identity document",
+                    },
+                },
+                invocation_state={},
+            )
+            hook.on_tool_call(call_event)
+
+            # 3. Tool result with simulated duration and sensitive result
+            result_event = AfterToolCallEvent(
+                agent=dummy_agent,
+                selected_tool=None,
+                tool_use={"name": "discover_workflow", "toolUseId": "tool_1", "input": {}},
+                invocation_state={},
+                result="Raw document secret output: DOB 1995-03-15",
+                duration=0.142,
+            )
+            hook.on_tool_result(result_event)
+
+            # 4. Complete invocation
+            complete_event = AfterInvocationEvent(agent=dummy_agent)
+            hook.on_invocation_complete(complete_event)
+
+        log_text = caplog.text
+
+        # Verify structured tags are present
+        assert "LIVE_AGENT_START invocation_id=inv_" in log_text
+        assert "TOOL_CALL discover_workflow" in log_text
+        assert "TOOL_RESULT discover_workflow success duration=0.142s" in log_text
+        assert "LIVE_AGENT_COMPLETE success invocation_id=inv_" in log_text
+
+        # Verify strict absence of sensitive data
+        forbidden_strings = [
+            "sk-leak-test",
+            "secret password",
+            "Confidential government identity document",
+            "DOB 1995-03-15",
+            "tool_1",
+        ]
+        for secret in forbidden_strings:
+            assert secret not in log_text, f"Leaked sensitive value into logs: {secret}"
+
+    def test_observability_does_not_alter_tool_behavior(self):
+        """Verify that tools function completely normally with unchanged return values."""
+        from app.tools.requirements import discover_workflow
+        result_raw = discover_workflow._tool_func(user_goal="example application")
+        import json
+        result = json.loads(result_raw)
+        assert result["status"] == "found"
+        assert result["workflow_id"] == "example_application"

@@ -5,8 +5,18 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import uuid
+from enum import Enum
 
 from strands import Agent
+from strands.hooks import (
+    AfterInvocationEvent,
+    AfterToolCallEvent,
+    BeforeInvocationEvent,
+    BeforeToolCallEvent,
+    HookProvider,
+    HookRegistry,
+)
 
 from app.prompts import SYSTEM_PROMPT
 from app.tools.documents import (
@@ -19,6 +29,110 @@ from app.tools.requirements import discover_workflow, get_workflow_requirements
 from app.tools.verification import verify_requirements
 
 logger = logging.getLogger(__name__)
+obs_logger = logging.getLogger("app.observability")
+
+
+class ModelStatus(str, Enum):
+    """Status of model provider credentials configuration."""
+
+    LIVE_READY = "LIVE_READY"
+    NO_CREDENTIALS = "NO_CREDENTIALS"
+    INVALID_PROVIDER = "INVALID_PROVIDER"
+
+
+def get_model_status() -> tuple[ModelStatus, str]:
+    """Inspect environment variables to determine whether live credentials are configured.
+
+    Performs zero network requests. The actual operational validity of credentials
+    against upstream provider APIs is only determined upon real model invocation.
+
+    Returns:
+        tuple[ModelStatus, str]: (status, descriptive_message)
+    """
+    provider = os.environ.get("MODEL_PROVIDER", "openai").strip().lower()
+    if provider not in {"openai", "anthropic"}:
+        return (
+            ModelStatus.INVALID_PROVIDER,
+            f"Unsupported MODEL_PROVIDER: '{provider}'. Supported: openai, anthropic",
+        )
+
+    if provider == "openai":
+        key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not key or key.startswith("your-") or key == "your-openai-api-key-here":
+            return (
+                ModelStatus.NO_CREDENTIALS,
+                "OPENAI_API_KEY is not set or is an obvious placeholder.",
+            )
+        model_id = os.environ.get("MODEL_ID", "gpt-4o")
+        return (
+            ModelStatus.LIVE_READY,
+            f"OpenAI credential configured (model: {model_id})",
+        )
+
+    elif provider == "anthropic":
+        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not key or key.startswith("your-") or key == "your-anthropic-api-key-here":
+            return (
+                ModelStatus.NO_CREDENTIALS,
+                "ANTHROPIC_API_KEY is not set or is an obvious placeholder.",
+            )
+        model_id = os.environ.get("MODEL_ID", "claude-sonnet-4-6")
+        return (
+            ModelStatus.LIVE_READY,
+            f"Anthropic credential configured (model: {model_id})",
+        )
+
+    return (ModelStatus.INVALID_PROVIDER, f"Unsupported MODEL_PROVIDER: '{provider}'")
+
+
+class SafeAgentObservabilityHook(HookProvider):
+    """Safe, non-sensitive observability hook for live Strands Agent execution.
+
+    Subscribes to Strands SDK hook events to log execution flow without exposing
+    user prompts, tool arguments, tool results, document contents, extracted facts,
+    PII, API keys, or authorization headers.
+    """
+
+    def __init__(self, logger_instance: logging.Logger | None = None) -> None:
+        self._logger = logger_instance or obs_logger
+        self._current_invocation_id: str = ""
+
+    def register_hooks(self, registry: HookRegistry) -> None:
+        registry.add_callback(BeforeInvocationEvent, self.on_invocation_start)
+        registry.add_callback(AfterInvocationEvent, self.on_invocation_complete)
+        registry.add_callback(BeforeToolCallEvent, self.on_tool_call)
+        registry.add_callback(AfterToolCallEvent, self.on_tool_result)
+
+    def on_invocation_start(self, event: BeforeInvocationEvent) -> None:
+        self._current_invocation_id = f"inv_{uuid.uuid4().hex[:8]}"
+        self._logger.info(f"LIVE_AGENT_START invocation_id={self._current_invocation_id}")
+
+    def on_invocation_complete(self, event: AfterInvocationEvent) -> None:
+        inv_id = self._current_invocation_id or "inv_unknown"
+        status = "failure" if getattr(event, "exception", None) else "success"
+        self._logger.info(f"LIVE_AGENT_COMPLETE {status} invocation_id={inv_id}")
+
+    def on_tool_call(self, event: BeforeToolCallEvent) -> None:
+        tool_name = "unknown_tool"
+        if hasattr(event, "tool_use") and isinstance(event.tool_use, dict):
+            tool_name = event.tool_use.get("name", "unknown_tool")
+        elif hasattr(event, "selected_tool") and event.selected_tool:
+            tool_name = getattr(event.selected_tool, "name", str(event.selected_tool))
+        self._logger.info(f"TOOL_CALL {tool_name}")
+
+    def on_tool_result(self, event: AfterToolCallEvent) -> None:
+        tool_name = "unknown_tool"
+        if hasattr(event, "tool_use") and isinstance(event.tool_use, dict):
+            tool_name = event.tool_use.get("name", "unknown_tool")
+        elif hasattr(event, "selected_tool") and event.selected_tool:
+            tool_name = getattr(event.selected_tool, "name", str(event.selected_tool))
+
+        status = "failure" if getattr(event, "exception", None) else "success"
+        duration = getattr(event, "duration", None)
+        if duration is not None and isinstance(duration, (int, float)):
+            self._logger.info(f"TOOL_RESULT {tool_name} {status} duration={duration:.3f}s")
+        else:
+            self._logger.info(f"TOOL_RESULT {tool_name} {status}")
 
 # All tools available to the agent (7 core tools)
 ALL_TOOLS = [
@@ -96,21 +210,31 @@ def _create_model():
 def create_agent(
     model=None,
     structured_output_model: type | None = None,
+    hooks: list | None = None,
 ) -> Agent:
     """Create and return the configured Paperwork Agent.
 
     Args:
         model: Optional custom Model instance. If not provided, creates provider from env.
         structured_output_model: Optional Pydantic model for default structured output.
+        hooks: Optional list of HookProvider instances. Attaches SafeAgentObservabilityHook by default.
     """
     if model is None:
         model = _create_model()
+
+    if hooks is None:
+        hooks = [SafeAgentObservabilityHook()]
+    else:
+        hooks = list(hooks)
+        if not any(isinstance(h, SafeAgentObservabilityHook) for h in hooks):
+            hooks.append(SafeAgentObservabilityHook())
 
     agent = Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
         tools=ALL_TOOLS,
         structured_output_model=structured_output_model,
+        hooks=hooks,
     )
 
     return agent

@@ -10,23 +10,28 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.agent import (
+    ModelStatus,
     WorkflowNotFoundError,
     assess_paperwork,
     assess_paperwork_deterministic,
+    get_model_status,
 )
 from app.schemas import ReadinessAssessment
-from app.tools.documents import list_documents
+from app.tools.documents import DOCUMENTS_DIR, SUPPORTED_EXTENSIONS, list_documents
 from app.tools.requirements import WORKFLOWS_DIR
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -62,7 +67,7 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Request Models
+# Request and Response Models
 # ---------------------------------------------------------------------------
 class AssessRequest(BaseModel):
     """Request model for paperwork readiness assessment."""
@@ -81,6 +86,34 @@ class WorkflowSummary(BaseModel):
     workflow_name: str
     description: str
     requirements_count: int = 0
+
+
+class DocumentUploadResponse(BaseModel):
+    """Response model for uploaded document."""
+
+    filename: str
+    size_bytes: int
+    message: str = "File uploaded successfully"
+
+
+class PreparePackageRequest(BaseModel):
+    """Request model for preparing an approved paperwork package."""
+
+    assessment: ReadinessAssessment
+    applicant_name: str | None = None
+    notes: str | None = None
+
+
+class PreparedPackageResponse(BaseModel):
+    """Response model for a prepared paperwork package."""
+
+    package_id: str
+    approved: bool = True
+    workflow_id: str
+    workflow_name: str
+    ready: bool
+    package: dict[str, Any]
+    markdown_summary: str
 
 
 # ---------------------------------------------------------------------------
@@ -184,26 +217,36 @@ async def assess(request: AssessRequest) -> ReadinessAssessment:
             detail="user_goal must not be empty or whitespace only.",
         )
 
-    # Check if a live model provider API key is set
-    provider = os.environ.get("MODEL_PROVIDER", "openai").lower()
-    key = os.environ.get(f"{provider.upper()}_API_KEY", "")
-    has_live_credentials = bool(key and not key.startswith("your-"))
+    model_status, status_msg = get_model_status()
 
     try:
-        if has_live_credentials:
+        if model_status == ModelStatus.LIVE_READY:
+            logger.info("Executing LIVE STRANDS AGENT assessment...")
             try:
-                logger.info("Executing live Strands agent assessment...")
                 return assess_paperwork(cleaned_goal)
             except Exception as e:
-                logger.warning(
-                    f"Live agent execution failed: {e}. Executing deterministic fallback."
+                logger.error(
+                    f"Live agent execution failed: {e}. Not converting to deterministic output."
                 )
-                return assess_paperwork_deterministic(cleaned_goal)
-        else:
-            # Deterministic assessment pipeline when no live LLM key is configured
-            logger.info("Executing deterministic assessment pipeline (no API key set)...")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Live agent execution failed: {e}",
+                )
+        elif model_status == ModelStatus.NO_CREDENTIALS:
+            logger.info(
+                f"Executing deterministic assessment pipeline (reason: {model_status.value} - {status_msg})..."
+            )
             return assess_paperwork_deterministic(cleaned_goal)
+        else:
+            # INVALID_PROVIDER
+            logger.error(f"Invalid model configuration: {status_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Invalid model configuration: {status_msg}",
+            )
 
+    except HTTPException:
+        raise
     except WorkflowNotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -215,3 +258,257 @@ async def assess(request: AssessRequest) -> ReadinessAssessment:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while assessing paperwork.",
         )
+
+
+@app.post(
+    "/api/documents/upload",
+    response_model=DocumentUploadResponse,
+    summary="Upload User Document",
+    responses={
+        400: {"description": "Invalid file, unsupported extension, or path traversal attempt"},
+        500: {"description": "Failed to save uploaded file"},
+    },
+)
+async def upload_document(file: UploadFile = File(...)) -> DocumentUploadResponse:
+    """Safely upload a user document to the local document vault.
+
+    Security & Safety guarantees:
+    - Path traversal protection: extracts basename via Path(name).name and resolves against DOCUMENTS_DIR.
+    - Supported extensions validation: (.txt, .md, .json, .pdf).
+    - Accidental overwrite protection: generates collision-free suffix if file exists.
+    - Files are strictly stored as static data and never executed.
+    """
+    raw_filename = file.filename or "upload.txt"
+    filename_only = Path(raw_filename).name
+    safe_filename = re.sub(r"[^a-zA-Z0-9_.-]", "_", filename_only)
+    if not safe_filename or safe_filename.startswith("."):
+        safe_filename = f"upload_{uuid.uuid4().hex[:6]}.txt"
+
+    ext = Path(safe_filename).suffix.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file extension '{ext}'. Allowed extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
+        )
+
+    target_dir = DOCUMENTS_DIR.resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    initial_target = (target_dir / safe_filename).resolve()
+    if not initial_target.is_relative_to(target_dir):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid filename or path traversal detected.",
+        )
+
+    # Collision avoidance: protect existing demo and user documents from accidental overwrite
+    target_path = initial_target
+    if target_path.exists():
+        stem = target_path.stem
+        suffix = target_path.suffix
+        unique_name = f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
+        target_path = (target_dir / unique_name).resolve()
+
+    try:
+        content = await file.read()
+        max_bytes = 10 * 1024 * 1024  # 10 MB limit
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File size exceeds maximum allowed limit of 10MB.",
+            )
+        target_path.write_bytes(content)
+        logger.info(f"Safely uploaded document: {target_path.name} ({len(content)} bytes)")
+        return DocumentUploadResponse(
+            filename=target_path.name,
+            size_bytes=len(content),
+            message="File uploaded successfully",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to save uploaded file: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while saving the uploaded document.",
+        )
+
+
+@app.post(
+    "/api/package/prepare",
+    response_model=PreparedPackageResponse,
+    summary="Prepare Approved Paperwork Package",
+    responses={
+        400: {"description": "Invalid assessment payload"},
+    },
+)
+async def prepare_package(request: PreparePackageRequest) -> PreparedPackageResponse:
+    """Prepare an approved application package and Markdown summary from an existing ReadinessAssessment.
+
+    Operates strictly on the already-produced ReadinessAssessment. Does NOT re-invoke the
+    LLM or Strands agent. The human approval authorizes work product preparation,
+    not external submission.
+    """
+    assessment = request.assessment
+    package_id = f"pkg-{uuid.uuid4().hex[:8]}"
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    all_checks = (
+        assessment.satisfied_requirements
+        + assessment.missing_requirements
+        + assessment.conflicts
+        + assessment.uncertainties
+    )
+
+    # Determine applicant name from request or extracted facts
+    applicant_name = request.applicant_name
+    if not applicant_name:
+        for check in all_checks:
+            for fact in check.evidence:
+                if fact.field.lower() in ("full_name", "name", "applicant_name") and fact.value:
+                    applicant_name = str(fact.value)
+                    break
+            if applicant_name:
+                break
+    if not applicant_name:
+        applicant_name = "Applicant"
+
+    # Collect unique verified facts across requirements
+    verified_facts: list[dict[str, Any]] = []
+    seen_fact_keys: set[tuple[str, str, str | None]] = set()
+    for check in all_checks:
+        for fact in check.evidence:
+            key = (fact.source_document, fact.field, fact.value)
+            if key not in seen_fact_keys:
+                seen_fact_keys.add(key)
+                verified_facts.append({
+                    "field": fact.field,
+                    "value": fact.value,
+                    "source_document": fact.source_document,
+                    "source_page": fact.source_page,
+                    "confidence": fact.confidence,
+                    "evidence_snippet": fact.evidence_snippet,
+                })
+
+    # Collect conflicts
+    conflict_items: list[dict[str, Any]] = []
+    for check in assessment.conflicts:
+        for conf in check.conflicts:
+            conflict_items.append({
+                "field": conf.field,
+                "requirement_name": check.requirement_name,
+                "values": conf.values,
+                "notes": check.notes,
+            })
+
+    package_data: dict[str, Any] = {
+        "package_id": package_id,
+        "workflow_id": assessment.workflow_id,
+        "workflow_name": assessment.workflow_name,
+        "applicant_name": applicant_name,
+        "created_at": created_at,
+        "ready": assessment.ready,
+        "completion_percentage": assessment.completion_percentage,
+        "status": "APPROVED_FOR_PREPARATION" if assessment.ready else "PREPARED_WITH_FLAGGED_GAPS",
+        "human_review": {
+            "approved": True,
+            "reviewed_at": created_at,
+            "notes": request.notes or "Approved for preparation by human reviewer.",
+        },
+        "requirements_summary": {
+            "satisfied": [c.model_dump() for c in assessment.satisfied_requirements],
+            "missing": [c.model_dump() for c in assessment.missing_requirements],
+            "conflicts": [c.model_dump() for c in assessment.conflicts],
+            "uncertainties": [c.model_dump() for c in assessment.uncertainties],
+        },
+        "verified_facts": verified_facts,
+        "conflicts": conflict_items,
+        "recommended_next_actions": assessment.recommended_next_actions,
+    }
+
+    # Generate authoritative, clean Markdown summary
+    status_text = "READY FOR SUBMISSION" if assessment.ready else "ACTION REQUIRED (INCOMPLETE / CONFLICTING EVIDENCE)"
+    md_lines = [
+        f"# Application Readiness Package: {assessment.workflow_name}",
+        "",
+        f"- **Package ID:** `{package_id}`",
+        f"- **Workflow ID:** `{assessment.workflow_id}`",
+        f"- **Applicant:** {applicant_name}",
+        f"- **Generated At:** {created_at}",
+        f"- **Readiness Status:** {status_text}",
+        f"- **Completion:** {assessment.completion_percentage}%",
+        "",
+        "## 1. Human Review Authorization",
+        "- **Review Decision:** Approved for work product preparation",
+        f"- **Reviewer Notes:** {request.notes or 'Approved for preparation by human reviewer.'}",
+        "",
+        "## 2. Requirement Verification Checklist",
+    ]
+
+    for check in assessment.satisfied_requirements:
+        md_lines.append(f"### ✅ SATISFIED: {check.requirement_name}")
+        md_lines.append(f"- **Requirement ID:** `{check.requirement_id}`")
+        if check.evidence:
+            md_lines.append("- **Supporting Evidence:**")
+            for ev in check.evidence:
+                md_lines.append(f"  - `{ev.source_document}`: {ev.field} = *\"{ev.value}\"* (confidence: {ev.confidence})")
+        md_lines.append("")
+
+    for check in assessment.missing_requirements:
+        md_lines.append(f"### ❌ MISSING: {check.requirement_name}")
+        md_lines.append(f"- **Requirement ID:** `{check.requirement_id}`")
+        md_lines.append(f"- **Guidance:** {check.notes or 'No supporting document found.'}")
+        md_lines.append("")
+
+    for check in assessment.conflicts:
+        md_lines.append(f"### ⚠️ CONFLICT: {check.requirement_name}")
+        md_lines.append(f"- **Requirement ID:** `{check.requirement_id}`")
+        md_lines.append(f"- **Details:** {check.notes or 'Conflicting values found across documents.'}")
+        for conf in check.conflicts:
+            val_strs = [f"{v.get('value')} ({v.get('source_document')})" for v in conf.values]
+            md_lines.append(f"  - **{conf.field}**: {', '.join(val_strs)}")
+        md_lines.append("")
+
+    for check in assessment.uncertainties:
+        md_lines.append(f"### ❓ UNCERTAIN: {check.requirement_name}")
+        md_lines.append(f"- **Requirement ID:** `{check.requirement_id}`")
+        md_lines.append(f"- **Details:** {check.notes or 'Confidence is low or verification uncertain.'}")
+        md_lines.append("")
+
+    md_lines.append("## 3. Verified Facts & Document Provenance")
+    if verified_facts:
+        for f in verified_facts:
+            md_lines.append(f"- **{f['field']}**: `{f['value']}` *(Source: `{f['source_document']}`, Confidence: {f['confidence']})*")
+    else:
+        md_lines.append("- *No verified facts extracted.*")
+
+    md_lines.append("")
+    md_lines.append("## 4. Flagged Conflicts & Discrepancies")
+    if conflict_items:
+        for conf in conflict_items:
+            val_strs = [f"'{v.get('value')}' in `{v.get('source_document')}`" for v in conf.get("values", [])]
+            md_lines.append(f"- ⚠️ **{conf['field']} Discrepancy**: {', '.join(val_strs)}")
+            if conf.get("notes"):
+                md_lines.append(f"  - {conf['notes']}")
+    else:
+        md_lines.append("- *No document conflicts detected.*")
+
+    if assessment.recommended_next_actions:
+        md_lines.append("")
+        md_lines.append("## 5. Recommended Next Actions")
+        for act in assessment.recommended_next_actions:
+            md_lines.append(f"- {act}")
+
+    md_lines.append("")
+    markdown_summary = "\n".join(md_lines)
+
+    return PreparedPackageResponse(
+        package_id=package_id,
+        approved=True,
+        workflow_id=assessment.workflow_id,
+        workflow_name=assessment.workflow_name,
+        ready=assessment.ready,
+        package=package_data,
+        markdown_summary=markdown_summary,
+    )
+
