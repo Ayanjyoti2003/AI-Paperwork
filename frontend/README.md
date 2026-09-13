@@ -1,9 +1,50 @@
-# Paperwork Agent - Frontend Workspace
+# Paperwork Agent UI
 
-This directory is reserved for the Paperwork Agent web frontend application.
+A modern Next.js UI for the Paperwork Agent concept: a personal administrative workspace that turns a user's goal into a verified, reviewable paperwork package.
 
-## Overview
-The frontend will interact with the Paperwork Agent Backend REST API (documented in `backend/`).
+## Stack
 
-## Expected Development Setup
-When initialized, frontend tooling (e.g., Vite/React/Next.js) will live here, configured to communicate with the backend running on `http://127.0.0.1:8000` with CORS enabled.
+- Next.js 16.3.3
+- React 19.3
+- TypeScript
+- Tailwind CSS 4.3
+- App Router
+- Cache Components
+- Turbopack
+
+## Included screens
+
+- Dashboard
+- New request
+- Document vault
+- Applications
+- Passport application detail
+- Settings
+
+## Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+## Build
+
+```bash
+npm run build
+npm start
+```
+
+## Structure
+
+```text
+app/
+components/
+  ui/
+lib/
+public/
+```
+
+Most components are Server Components. Only navigation state, request composition, and local file selection use client components.
