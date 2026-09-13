@@ -6,8 +6,13 @@ Run with: python -m pytest tests/test_agent.py -v
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+
+# Ensure backend root is on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 from pydantic import BaseModel

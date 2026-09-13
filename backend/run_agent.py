@@ -15,8 +15,14 @@ import os
 import sys
 from pathlib import Path
 
-# Load .env file if it exists
+# Ensure backend root is on sys.path
+backend_dir = Path(__file__).resolve().parent
+if str(backend_dir) not in sys.path:
+    sys.path.insert(0, str(backend_dir))
+
+# Load .env file if it exists (checks backend/ directory and current working directory)
 from dotenv import load_dotenv
+load_dotenv(backend_dir / ".env")
 load_dotenv()
 
 

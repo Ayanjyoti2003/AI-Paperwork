@@ -1,7 +1,9 @@
 # Environment
 .env
+.env*.local
 .venv/
 venv/
+ENV/
 
 # Python
 __pycache__/
@@ -10,6 +12,15 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node / Frontend
+node_modules/
+.next/
+.turbo/
+out/
 
 # IDE
 .vscode/

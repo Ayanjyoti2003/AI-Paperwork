@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from strands import tool
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-WORKFLOWS_DIR = _PROJECT_ROOT / "data" / "workflows"
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
+WORKFLOWS_DIR = Path(os.environ.get("WORKFLOWS_DIR", _BACKEND_ROOT / "data" / "workflows"))
 
 
 @tool

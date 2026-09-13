@@ -29,6 +29,8 @@ from app.schemas import ReadinessAssessment
 from app.tools.documents import list_documents
 from app.tools.requirements import WORKFLOWS_DIR
 
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(_BACKEND_DIR / ".env")
 load_dotenv()
 logger = logging.getLogger("app.api")
 

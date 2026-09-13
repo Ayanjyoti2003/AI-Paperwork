@@ -11,7 +11,12 @@ Verifies all endpoints using FastAPI TestClient:
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from unittest.mock import patch
+
+# Ensure backend root is on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 from fastapi.testclient import TestClient

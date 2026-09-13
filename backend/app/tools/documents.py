@@ -11,9 +11,9 @@ from typing import Optional
 
 from strands import tool
 
-# Resolve the data/documents directory relative to project root
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DOCUMENTS_DIR = _PROJECT_ROOT / "data" / "documents"
+# Resolve the data/documents directory relative to backend root
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
+DOCUMENTS_DIR = Path(os.environ.get("DOCUMENTS_DIR", _BACKEND_ROOT / "data" / "documents"))
 
 # Supported file types and their readers
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".json", ".pdf"}
