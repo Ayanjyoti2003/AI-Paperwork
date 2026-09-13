@@ -143,3 +143,79 @@ def assess_paperwork(
     raise RuntimeError(
         "Agent execution completed but did not produce a validated ReadinessAssessment structured output."
     )
+
+
+class WorkflowNotFoundError(Exception):
+    """Raised when a user goal cannot be matched to any available workflow."""
+    pass
+
+
+def assess_paperwork_deterministic(goal: str):
+    """Execute the deterministic paperwork assessment pipeline.
+
+    Used when no live LLM model API key is configured or for deterministic validation.
+    Performs workflow discovery, requirement loading, document discovery, targeted
+    fact extraction, and authoritative deterministic verification.
+
+    Args:
+        goal: The user's natural language goal (e.g. 'I want to complete the example application.').
+
+    Returns:
+        ReadinessAssessment: Validated Pydantic structured output model.
+
+    Raises:
+        WorkflowNotFoundError: If no matching workflow can be identified for the goal.
+    """
+    import json
+    from app.schemas import ReadinessAssessment
+
+    # 1. Discover target workflow
+    discovery_raw = discover_workflow._tool_func(user_goal=goal)
+    discovery = json.loads(discovery_raw)
+    if discovery.get("status") == "workflow_not_found":
+        raise WorkflowNotFoundError(
+            discovery.get("message", f"No workflow could be identified for goal: '{goal}'")
+        )
+
+    workflow_id = discovery["workflow_id"]
+
+    # 2. Load requirements
+    wf_raw = get_workflow_requirements._tool_func(workflow_id=workflow_id)
+    wf_data = json.loads(wf_raw)
+    requirements = wf_data.get("requirements", [])
+
+    # 3. Discover available documents
+    docs_raw = list_documents._tool_func()
+    docs_data = json.loads(docs_raw)
+    available_docs = docs_data.get("documents", [])
+
+    # 4. Extract facts with provenance across documents
+    all_facts = []
+    for doc in available_docs:
+        fname = doc["filename"].lower()
+        doc_id = doc["document_id"]
+
+        if "identity" in fname or "passport" in fname or "id" in fname:
+            fields = "full_name,date_of_birth,nationality,id_number,address"
+        elif "address" in fname or "bill" in fname or "utility" in fname:
+            fields = "name,address"
+        elif "certificate" in fname or "degree" in fname or "diploma" in fname:
+            fields = "full_name,date_of_birth,qualification,institution"
+        else:
+            fields = ",".join(
+                f for r in requirements for f in r.get("relevant_fields", [])
+                if f != "photograph"
+            )
+
+        facts_raw = extract_document_facts._tool_func(document_id=doc_id, requested_fields=fields)
+        facts_data = json.loads(facts_raw)
+        for fact in facts_data.get("extracted_facts", []):
+            if fact.get("value"):
+                all_facts.append(fact)
+
+    # 5. Authoritative deterministic verification
+    assessment_raw = verify_requirements._tool_func(
+        workflow_id=workflow_id,
+        evidence_json=json.dumps(all_facts),
+    )
+    return ReadinessAssessment.model_validate_json(assessment_raw)
