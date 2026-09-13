@@ -1,0 +1,55 @@
+{
+    "workflow_id": "example_application",
+    "workflow_name": "Example Government Application",
+    "description": "A general-purpose application requiring standard identity verification, address proof, educational credentials, and a photograph.",
+    "requirements": [
+        {
+            "id": "req_identity",
+            "name": "Identity Proof",
+            "description": "A valid government-issued identity document (passport, national ID card, or driver's license)",
+            "required": true,
+            "accepted_evidence_types": ["national_id", "passport", "drivers_license"],
+            "relevant_fields": ["full_name", "date_of_birth", "nationality", "id_number"]
+        },
+        {
+            "id": "req_address",
+            "name": "Address Proof",
+            "description": "Recent utility bill, bank statement, or official letter showing current residential address (within last 3 months)",
+            "required": true,
+            "accepted_evidence_types": ["utility_bill", "bank_statement", "official_letter"],
+            "relevant_fields": ["address"]
+        },
+        {
+            "id": "req_dob",
+            "name": "Date of Birth Verification",
+            "description": "Date of birth must be verifiable from at least one official document",
+            "required": true,
+            "accepted_evidence_types": ["national_id", "passport", "birth_certificate"],
+            "relevant_fields": ["date_of_birth"]
+        },
+        {
+            "id": "req_photo",
+            "name": "Recent Photograph",
+            "description": "A recent passport-size color photograph (taken within last 6 months)",
+            "required": true,
+            "accepted_evidence_types": ["photograph"],
+            "relevant_fields": ["photograph"]
+        },
+        {
+            "id": "req_education",
+            "name": "Educational Certificate",
+            "description": "Highest educational qualification certificate or transcript",
+            "required": false,
+            "accepted_evidence_types": ["degree_certificate", "transcript", "diploma"],
+            "relevant_fields": ["qualification", "institution"]
+        },
+        {
+            "id": "req_employment",
+            "name": "Employment Reference",
+            "description": "Letter from current or most recent employer confirming employment status",
+            "required": true,
+            "accepted_evidence_types": ["employment_letter", "pay_stub", "contract"],
+            "relevant_fields": ["employer", "position", "employment_date"]
+        }
+    ]
+}

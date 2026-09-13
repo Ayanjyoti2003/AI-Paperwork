@@ -1,0 +1,26 @@
+UTILITY BILL - ADDRESS PROOF
+=============================
+
+Provider: Freedonia Electric & Gas Co.
+Account Number: FEG-2024-456789
+Statement Date: 2025-08-01
+Billing Period: July 1, 2025 - July 31, 2025
+
+Customer Details
+----------------
+Name: Jane A. Doe
+Address: 42 Maple Avenue, Apartment 7B, Greenfield, Freedonia 12345
+Phone: +1-555-0142
+Email: jane.doe@example.com
+
+Billing Summary
+---------------
+Previous Balance: $85.50
+Payments Received: -$85.50
+Current Charges: $92.30
+  - Electricity: $67.80
+  - Gas: $24.50
+Amount Due: $92.30
+Due Date: 2025-08-25
+
+Note: This utility bill serves as proof of residence at the above address.

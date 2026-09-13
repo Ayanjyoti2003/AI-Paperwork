@@ -1,0 +1,117 @@
+"""Paperwork Agent - Pydantic schemas for documents, requirements, and assessments."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+# --- Document Schemas ---
+
+class Document(BaseModel):
+    """Metadata for a document in the local store."""
+
+    document_id: str = Field(description="Stable identifier derived from filename")
+    filename: str = Field(description="Original filename")
+    file_type: str = Field(description="File extension (e.g., txt, md, json, pdf)")
+    size_bytes: int = Field(description="File size in bytes")
+    modified_at: Optional[str] = Field(default=None, description="Last modified timestamp")
+
+
+class DocumentSearchResult(BaseModel):
+    """A single search hit."""
+
+    document_id: str
+    filename: str
+    snippet: str = Field(description="Relevant text snippet")
+    relevance_score: float = Field(description="0.0 to 1.0 relevance score")
+
+
+class DocumentFact(BaseModel):
+    """A single factual field extracted from a document with provenance."""
+
+    field: str = Field(description="Name of the factual field (e.g., 'date_of_birth')")
+    value: Optional[str] = Field(default=None, description="Extracted value, None if not found")
+    source_document: str = Field(description="Document ID the fact was extracted from")
+    source_page: Optional[int] = Field(default=None, description="Page number if applicable")
+    confidence: str = Field(description="high, medium, low, or not_found")
+    evidence_snippet: Optional[str] = Field(
+        default=None, description="Verbatim snippet supporting the extraction"
+    )
+
+
+# --- Requirement Schemas ---
+
+class Requirement(BaseModel):
+    """A single requirement in a workflow."""
+
+    id: str
+    name: str
+    description: str
+    required: bool = True
+    accepted_evidence_types: list[str] = Field(
+        default_factory=list,
+        description="Types of documents or evidence that satisfy this requirement",
+    )
+    relevant_fields: list[str] = Field(
+        default_factory=list,
+        description="Factual fields to look for (e.g., 'full_name', 'date_of_birth')",
+    )
+
+
+class Workflow(BaseModel):
+    """A workflow definition containing its requirements."""
+
+    workflow_id: str
+    workflow_name: str
+    description: str
+    requirements: list[Requirement]
+
+
+# --- Verification Schemas ---
+
+class RequirementStatus(str, Enum):
+    """Status of a single requirement check."""
+
+    SATISFIED = "satisfied"
+    MISSING = "missing"
+    CONFLICT = "conflict"
+    UNCERTAIN = "uncertain"
+
+
+class ConflictDetail(BaseModel):
+    """Details about a conflicting fact across documents."""
+
+    field: str
+    values: list[dict[str, str]] = Field(
+        description="List of {source_document, value} pairs showing conflicting values"
+    )
+
+
+class RequirementCheck(BaseModel):
+    """Result of checking a single requirement against evidence."""
+
+    requirement_id: str
+    requirement_name: str
+    status: RequirementStatus
+    evidence: list[DocumentFact] = Field(default_factory=list)
+    conflicts: list[ConflictDetail] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+
+class ReadinessAssessment(BaseModel):
+    """Final assessment of paperwork readiness for a workflow."""
+
+    workflow_id: str
+    workflow_name: str
+    ready: bool = Field(description="True if all required requirements are satisfied without conflicts")
+    completion_percentage: float = Field(description="Percentage of requirements satisfied")
+    satisfied_requirements: list[RequirementCheck] = Field(default_factory=list)
+    missing_requirements: list[RequirementCheck] = Field(default_factory=list)
+    conflicts: list[RequirementCheck] = Field(default_factory=list)
+    uncertainties: list[RequirementCheck] = Field(default_factory=list)
+    recommended_next_actions: list[str] = Field(default_factory=list)
+    assessed_at: str = Field(default_factory=lambda: datetime.now().isoformat())
