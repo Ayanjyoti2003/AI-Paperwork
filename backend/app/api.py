@@ -274,7 +274,7 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentUploadRespons
 
     Security & Safety guarantees:
     - Path traversal protection: extracts basename via Path(name).name and resolves against DOCUMENTS_DIR.
-    - Supported extensions validation: (.txt, .md, .json, .pdf).
+    - Supported extensions validation: (.txt, .md, .json, .pdf, .png, .jpg, .jpeg).
     - Accidental overwrite protection: generates collision-free suffix if file exists.
     - Files are strictly stored as static data and never executed.
     """

@@ -48,7 +48,7 @@ export function UploadZone({
       >
         <input
           type="file"
-          accept=".txt,.md,.json,.pdf"
+          accept=".txt,.md,.json,.pdf,.png,.jpg,.jpeg"
           disabled={uploading}
           className="hidden"
           onChange={(event) => {
@@ -69,7 +69,7 @@ export function UploadZone({
           {uploading ? "Uploading safely to vault..." : "Drop a document here or browse"}
         </p>
         <p className="mt-1 text-xs text-[#8c94a1]">
-          TXT, MD, JSON or PDF · up to 10 MB
+          TXT, MD, JSON, PDF or Images (PNG, JPG) · up to 10 MB
         </p>
       </label>
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import os
 import re
@@ -11,12 +12,29 @@ from typing import Optional
 
 from strands import tool
 
+from app.ocr import (
+    OCRProviderError,
+    check_aws_credentials,
+    extract_document_ocr,
+)
+
 # Resolve the data/documents directory relative to backend root
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 DOCUMENTS_DIR = Path(os.environ.get("DOCUMENTS_DIR", _BACKEND_ROOT / "data" / "documents"))
 
 # Supported file types and their readers
-SUPPORTED_EXTENSIONS = {".txt", ".md", ".json", ".pdf"}
+SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+SUPPORTED_EXTENSIONS = {".txt", ".md", ".json", ".pdf"} | SUPPORTED_IMAGE_EXTENSIONS
+
+
+@dataclass
+class ExtractedDocument:
+    """Normalized document text and provenance metadata."""
+
+    content: str
+    extraction_method: str = "native_text"
+    confidence: Optional[float] = None
+    page_count: int = 1
 
 
 def _make_document_id(filename: str) -> str:
@@ -49,15 +67,120 @@ def _read_pdf_file(path: Path) -> str:
         return f"[PDF text extraction failed: {e}]"
 
 
-def _read_file_content(path: Path) -> str:
-    """Read file content based on extension."""
+def get_document_extraction(path: Path) -> ExtractedDocument:
+    """Extract normalized text and provenance from a document.
+
+    Automatically routes to:
+    - native text reader for .txt, .md, .json
+    - native PDF text extraction for text PDFs
+    - OCR for image-only/scanned PDFs
+    - OCR for images (.png, .jpg, .jpeg)
+    """
     ext = path.suffix.lower()
+
+    if ext in {".txt", ".md", ".json"}:
+        return ExtractedDocument(
+            content=_read_text_file(path),
+            extraction_method="native_text",
+            confidence=None,
+            page_count=1,
+        )
+
     if ext == ".pdf":
-        return _read_pdf_file(path)
-    elif ext in {".txt", ".md", ".json"}:
-        return _read_text_file(path)
-    else:
-        return f"[Unsupported file type: {ext}]"
+        # Check if native text extraction yields usable text
+        try:
+            from PyPDF2 import PdfReader
+
+            reader = PdfReader(str(path))
+            pages = []
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text()
+                if text and text.strip():
+                    pages.append(f"[Page {i + 1}]\n{text.strip()}")
+
+            if pages and sum(len(p) for p in pages) > 20:
+                return ExtractedDocument(
+                    content="\n\n".join(pages),
+                    extraction_method="native_text",
+                    confidence=None,
+                    page_count=len(reader.pages),
+                )
+        except Exception:
+            pass
+
+        # If native PDF extraction returned no usable text, treat as scanned PDF requiring OCR
+        try:
+            ocr_res = extract_document_ocr(path)
+            if not ocr_res.text:
+                return ExtractedDocument(
+                    content="[Scanned PDF processed by OCR — no readable text detected]",
+                    extraction_method=ocr_res.extraction_method,
+                    confidence=ocr_res.confidence,
+                    page_count=len(ocr_res.pages) or 1,
+                )
+            return ExtractedDocument(
+                content=ocr_res.text,
+                extraction_method=ocr_res.extraction_method,
+                confidence=ocr_res.confidence,
+                page_count=len(ocr_res.pages) or 1,
+            )
+        except OCRProviderError as e:
+            return ExtractedDocument(
+                content=f"[OCR extraction failed: {e}]",
+                extraction_method="error",
+                confidence=None,
+                page_count=1,
+            )
+        except Exception as e:
+            return ExtractedDocument(
+                content=f"[PDF extraction failed: {e}]",
+                extraction_method="error",
+                confidence=None,
+                page_count=1,
+            )
+
+    if ext in SUPPORTED_IMAGE_EXTENSIONS:
+        try:
+            ocr_res = extract_document_ocr(path)
+            if not ocr_res.text:
+                return ExtractedDocument(
+                    content="[Image processed by OCR — no readable text detected]",
+                    extraction_method=ocr_res.extraction_method,
+                    confidence=ocr_res.confidence,
+                    page_count=1,
+                )
+            return ExtractedDocument(
+                content=ocr_res.text,
+                extraction_method=ocr_res.extraction_method,
+                confidence=ocr_res.confidence,
+                page_count=len(ocr_res.pages) or 1,
+            )
+        except OCRProviderError as e:
+            return ExtractedDocument(
+                content=f"[OCR extraction failed: {e}]",
+                extraction_method="error",
+                confidence=None,
+                page_count=1,
+            )
+        except Exception as e:
+            return ExtractedDocument(
+                content=f"[Image OCR failed: {e}]",
+                extraction_method="error",
+                confidence=None,
+                page_count=1,
+            )
+
+    return ExtractedDocument(
+        content=f"[Unsupported file type: {ext}]",
+        extraction_method="unsupported",
+        confidence=None,
+        page_count=1,
+    )
+
+
+def _read_file_content(path: Path) -> str:
+    """Read file content based on extension, automatically invoking OCR when necessary."""
+    return get_document_extraction(path).content
 
 
 def _get_file_metadata(path: Path) -> dict:
@@ -92,12 +215,24 @@ def list_documents() -> str:
     for path in sorted(DOCUMENTS_DIR.iterdir()):
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
             meta = _get_file_metadata(path)
+            ext = path.suffix.lower()
+            if ext in {".txt", ".md", ".json"}:
+                ext_method = "native_text"
+            elif ext in SUPPORTED_IMAGE_EXTENSIONS:
+                provider_env = os.environ.get("OCR_PROVIDER", "auto").lower()
+                ext_method = "textract" if (provider_env == "textract" or (provider_env == "auto" and check_aws_credentials())) else "local_ocr"
+            elif ext == ".pdf":
+                ext_method = "native_text"
+            else:
+                ext_method = "native_text"
+
             documents.append({
                 "document_id": _make_document_id(path.name),
                 "filename": path.name,
                 "file_type": path.suffix.lstrip(".").lower(),
                 "size_bytes": meta["size_bytes"],
                 "modified_at": meta["modified_at"],
+                "extraction_method": ext_method,
             })
 
     return json.dumps({"documents": documents, "count": len(documents)}, indent=2)
@@ -203,7 +338,8 @@ def read_document(document_id: str) -> str:
     for path in DOCUMENTS_DIR.iterdir():
         if path.is_file() and _make_document_id(path.name) == document_id:
             meta = _get_file_metadata(path)
-            content = _read_file_content(path)
+            extracted = get_document_extraction(path)
+            content = extracted.content
 
             # Limit extremely large files to ~50KB of text
             if len(content) > 50_000:
@@ -215,6 +351,8 @@ def read_document(document_id: str) -> str:
                 "file_type": path.suffix.lstrip(".").lower(),
                 "size_bytes": meta["size_bytes"],
                 "modified_at": meta["modified_at"],
+                "extraction_method": extracted.extraction_method,
+                "confidence": extracted.confidence,
                 "content": content,
             }, indent=2)
 
@@ -251,7 +389,8 @@ def extract_document_facts(document_id: str, requested_fields: str) -> str:
     if target_path is None:
         return json.dumps({"error": f"Document not found with id: {document_id}"})
 
-    content = _read_file_content(target_path)
+    extracted = get_document_extraction(target_path)
+    content = extracted.content
     if content.startswith("["):
         return json.dumps({
             "error": "Could not extract text from document",
@@ -268,7 +407,14 @@ def extract_document_facts(document_id: str, requested_fields: str) -> str:
 
     for field in fields:
         # Try to find the field in the document using flexible pattern matching
-        fact = _extract_single_fact(field, content, _make_document_id(target_path.name), target_path.name)
+        fact = _extract_single_fact(
+            field=field,
+            content=content,
+            doc_id=_make_document_id(target_path.name),
+            filename=target_path.name,
+            extraction_method=extracted.extraction_method,
+            ocr_confidence=extracted.confidence,
+        )
         facts.append(fact)
 
     return json.dumps({
@@ -278,7 +424,25 @@ def extract_document_facts(document_id: str, requested_fields: str) -> str:
     }, indent=2)
 
 
-def _extract_single_fact(field: str, content: str, doc_id: str, filename: str) -> dict:
+def _detect_page_number(match_start: int, content: str) -> Optional[int]:
+    """Find which [Page X] section the match occurred in."""
+    page_matches = list(re.finditer(r"\[Page\s+(\d+)\]", content[:match_start + 1]))
+    if page_matches:
+        try:
+            return int(page_matches[-1].group(1))
+        except (ValueError, IndexError):
+            pass
+    return 1
+
+
+def _extract_single_fact(
+    field: str,
+    content: str,
+    doc_id: str,
+    filename: str,
+    extraction_method: str = "native_text",
+    ocr_confidence: Optional[float] = None,
+) -> dict:
     """Try to extract a single fact from document content using keyword/pattern matching."""
     field_lower = field.lower().replace("_", " ")
     content_lower = content.lower()
@@ -291,8 +455,8 @@ def _extract_single_fact(field: str, content: str, doc_id: str, filename: str) -
 
     # Add common aliases
     aliases = {
-        "full name": ["name", "full name", "applicant name", "holder name"],
-        "date of birth": ["date of birth", "dob", "birth date", "born"],
+        "full name": ["name", "full name", "applicant name", "holder name", "fullname"],
+        "date of birth": ["date of birth", "dob", "birth date", "born", "dateofbirth"],
         "address": ["address", "residential address", "current address", "home address"],
         "phone": ["phone", "telephone", "mobile", "contact number"],
         "email": ["email", "e-mail", "email address"],
@@ -324,14 +488,18 @@ def _extract_single_fact(field: str, content: str, doc_id: str, filename: str) -
                 start = max(0, match.start() - 20)
                 end = min(len(content), match.end() + 50)
                 snippet = content[start:end].strip()
+                page_num = _detect_page_number(match.start(), content)
+                conf = ocr_confidence if (extraction_method != "native_text" and ocr_confidence is not None) else "high"
 
                 return {
                     "field": field,
                     "value": value,
                     "source_document": doc_id,
-                    "source_page": None,
-                    "confidence": "high",
+                    "source_page": page_num,
+                    "page_number": page_num,
+                    "confidence": conf,
                     "evidence_snippet": snippet,
+                    "extraction_method": extraction_method,
                 }
 
     # If not found via patterns, check if the field keyword exists at all
@@ -347,8 +515,10 @@ def _extract_single_fact(field: str, content: str, doc_id: str, filename: str) -
                     "value": None,
                     "source_document": doc_id,
                     "source_page": None,
+                    "page_number": None,
                     "confidence": "low",
                     "evidence_snippet": line.strip()[:300],
+                    "extraction_method": extraction_method,
                 }
 
     return {
@@ -356,6 +526,8 @@ def _extract_single_fact(field: str, content: str, doc_id: str, filename: str) -
         "value": None,
         "source_document": doc_id,
         "source_page": None,
+        "page_number": None,
         "confidence": "not_found",
         "evidence_snippet": None,
+        "extraction_method": extraction_method,
     }

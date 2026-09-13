@@ -1,15 +1,28 @@
-"""Paperwork Agent - Verification tool for checking requirements against evidence."""
-
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from strands import tool
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 WORKFLOWS_DIR = Path(os.environ.get("WORKFLOWS_DIR", _BACKEND_ROOT / "data" / "workflows"))
+
+
+def _is_high_confidence(conf: Any) -> bool:
+    """Check if confidence is high, supporting legacy strings and numeric scores."""
+    if conf == "high":
+        return True
+    if isinstance(conf, (int, float)):
+        return conf >= 0.7
+    if isinstance(conf, str):
+        try:
+            return float(conf) >= 0.7
+        except ValueError:
+            pass
+    return False
 
 
 @tool
@@ -139,7 +152,7 @@ def verify_requirements(workflow_id: str, evidence_json: str) -> str:
 
         # Check confidence levels
         has_high_confidence = any(
-            f.get("confidence") == "high" and f.get("value") is not None
+            _is_high_confidence(f.get("confidence")) and f.get("value") is not None
             for f in matching_evidence
         )
         has_value = any(f.get("value") is not None for f in matching_evidence)

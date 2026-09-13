@@ -24,6 +24,9 @@ function getDocumentTypeLabel(filename: string, fileType: string): string {
   if (lower.includes("photo")) {
     return "Photograph";
   }
+  if (["png", "jpg", "jpeg"].includes(fileType.toLowerCase())) {
+    return "Scanned Image";
+  }
   return `${fileType.toUpperCase()} Document`;
 }
 
@@ -101,6 +104,7 @@ export default function DocumentsPage() {
                   type={getDocumentTypeLabel(doc.filename, doc.file_type)}
                   status="Available"
                   date={`${(doc.size_bytes / 1024).toFixed(1)} KB`}
+                  extractionMethod={doc.extraction_method}
                 />
               ))
             )}

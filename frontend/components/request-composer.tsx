@@ -190,7 +190,7 @@ export function RequestComposer() {
                 Paperwork Agent is running verification pipeline...
               </p>
               <p className="mt-0.5 text-xs text-[#697892]">
-                Discovering target workflow, extracting facts with document provenance, and performing cross-document conflict checks.
+                Discovering target workflow, reading documents (with OCR for scans/images), extracting facts with document provenance, and performing cross-document conflict checks.
               </p>
             </div>
           </div>
@@ -393,7 +393,9 @@ export function RequestComposer() {
                                 <span className="font-semibold">{ev.field}:</span>{" "}
                                 <span>"{ev.value}"</span>{" "}
                                 <span className="text-[#65a30d]">
-                                  (from {ev.source_document})
+                                  (from {ev.source_document}
+                                  {ev.extraction_method && ev.extraction_method !== "native_text" ? ` · ${ev.extraction_method}` : ""}
+                                  {typeof ev.confidence === "number" ? ` · ${(ev.confidence * 100).toFixed(0)}% OCR` : ""})
                                 </span>
                               </div>
                             ))}

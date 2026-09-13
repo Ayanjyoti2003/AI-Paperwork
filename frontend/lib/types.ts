@@ -18,8 +18,10 @@ export type DocumentFact = {
   value: string | null;
   source_document: string;
   source_page?: number | null;
-  confidence: string;
+  page_number?: number | null;
+  confidence: string | number;
   evidence_snippet?: string | null;
+  extraction_method?: string | null;
 };
 
 export type ConflictValue = {
@@ -67,6 +69,7 @@ export type DocumentItem = {
   file_type: string;
   size_bytes: number;
   modified_at?: string | null;
+  extraction_method?: string | null;
 };
 
 export type DocumentUploadResponse = {

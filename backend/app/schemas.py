@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # --- Document Schemas ---
@@ -16,9 +16,12 @@ class Document(BaseModel):
 
     document_id: str = Field(description="Stable identifier derived from filename")
     filename: str = Field(description="Original filename")
-    file_type: str = Field(description="File extension (e.g., txt, md, json, pdf)")
+    file_type: str = Field(description="File extension (e.g., txt, md, json, pdf, png, jpg)")
     size_bytes: int = Field(description="File size in bytes")
     modified_at: Optional[str] = Field(default=None, description="Last modified timestamp")
+    extraction_method: Optional[str] = Field(
+        default=None, description="native_text, local_ocr, or textract"
+    )
 
 
 class DocumentSearchResult(BaseModel):
@@ -37,10 +40,24 @@ class DocumentFact(BaseModel):
     value: Optional[str] = Field(default=None, description="Extracted value, None if not found")
     source_document: str = Field(description="Document ID the fact was extracted from")
     source_page: Optional[int] = Field(default=None, description="Page number if applicable")
-    confidence: str = Field(description="high, medium, low, or not_found")
+    page_number: Optional[int] = Field(default=None, description="Page number if applicable")
+    confidence: Union[str, float] = Field(
+        default="high", description="high, medium, low, not_found, or numeric OCR confidence"
+    )
     evidence_snippet: Optional[str] = Field(
         default=None, description="Verbatim snippet supporting the extraction"
     )
+    extraction_method: Optional[str] = Field(
+        default="native_text", description="native_text, local_ocr, or textract"
+    )
+
+    @model_validator(mode="after")
+    def sync_page_numbers(self) -> DocumentFact:
+        if self.source_page is None and self.page_number is not None:
+            self.source_page = self.page_number
+        elif self.page_number is None and self.source_page is not None:
+            self.page_number = self.source_page
+        return self
 
 
 # --- Requirement Schemas ---
