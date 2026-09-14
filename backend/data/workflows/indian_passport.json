@@ -1,0 +1,43 @@
+{
+    "workflow_id": "indian_passport",
+    "workflow_name": "Indian Passport Application (Fresh / Reissue)",
+    "description": "Application for an Indian passport requiring proof of present address, date of birth, and identity.",
+    "requirements": [
+        {
+            "id": "req_address_proof",
+            "name": "Proof of Present Address",
+            "description": "Valid address proof such as Aadhaar Card, Electricity Bill, Water Bill, Telephone Bill, or Bank Passbook.",
+            "required": true,
+            "accepted_evidence_types": ["aadhaar_card", "utility_bill", "bank_passbook", "rent_agreement"],
+            "relevant_fields": ["full_name", "address"],
+            "validation_hints": "Address must match the current residential address of the applicant and be recently dated if utility bill."
+        },
+        {
+            "id": "req_dob_proof",
+            "name": "Proof of Date of Birth",
+            "description": "Birth Certificate issued by municipal authority, Aadhaar Card, PAN Card, or School Leaving / Matriculation Certificate.",
+            "required": true,
+            "accepted_evidence_types": ["birth_certificate", "aadhaar_card", "pan_card", "school_certificate"],
+            "relevant_fields": ["full_name", "date_of_birth"],
+            "validation_hints": "Date of birth must be consistent across all submitted documents without discrepancy."
+        },
+        {
+            "id": "req_identity_proof",
+            "name": "Proof of Identity",
+            "description": "Government-issued identity document such as Aadhaar Card, PAN Card, or Voter ID Card.",
+            "required": true,
+            "accepted_evidence_types": ["aadhaar_card", "pan_card", "voter_id", "national_id"],
+            "relevant_fields": ["full_name", "id_number", "date_of_birth"],
+            "validation_hints": "Full legal name and photo ID must match the applicant details."
+        },
+        {
+            "id": "req_non_ecr",
+            "name": "Non-ECR Proof (Educational Qualification)",
+            "description": "10th standard (Matriculation) or higher educational pass certificate to qualify for Non-ECR (Emigration Check Not Required) status.",
+            "required": false,
+            "accepted_evidence_types": ["matriculation_certificate", "degree_certificate", "diploma"],
+            "relevant_fields": ["full_name", "qualification", "institution"],
+            "validation_hints": "Name of applicant on educational certificate must match identity proof."
+        }
+    ]
+}

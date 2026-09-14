@@ -141,3 +141,131 @@ class TestAssessEndpoint:
             data = response.json()
             assert data["workflow_id"] == "example_application"
             assert "ready" in data
+
+
+class TestDocumentUploadEndpoints:
+    """Tests for POST /api/documents/upload and DELETE /api/documents/{document_id}."""
+
+    def test_upload_valid_text_document(self):
+        filename = "test_birth_certificate.txt"
+        content = b"Full Name: Arion Dutta\nDate of Birth: 12 March 2000\nPlace of Birth: Kolkata\n"
+        
+        try:
+            response = client.post(
+                "/api/documents/upload",
+                files={"file": (filename, content, "text/plain")},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["filename"] == filename
+            assert data["original_filename"] == filename
+            assert data["file_type"] == "txt"
+            assert data["size_bytes"] == len(content)
+            assert "document_id" in data
+            doc_id = data["document_id"]
+
+            # Verify it appears in GET /api/documents
+            list_res = client.get("/api/documents")
+            assert list_res.status_code == 200
+            docs = list_res.json()["documents"]
+            found = next((d for d in docs if d["document_id"] == doc_id), None)
+            assert found is not None
+            assert found["filename"] == filename
+
+        finally:
+            # Clean up
+            client.delete(f"/api/documents/{doc_id}")
+
+    def test_upload_unsupported_extension_returns_415(self):
+        response = client.post(
+            "/api/documents/upload",
+            files={"file": ("malicious_script.exe", b"binary content", "application/octet-stream")},
+        )
+        assert response.status_code == 415
+        assert "Unsupported file type" in response.json()["detail"]
+
+    def test_upload_empty_file_returns_400(self):
+        response = client.post(
+            "/api/documents/upload",
+            files={"file": ("empty_file.txt", b"", "text/plain")},
+        )
+        assert response.status_code == 400
+        assert "empty" in response.json()["detail"].lower()
+
+    def test_upload_oversized_file_returns_413(self):
+        # Set max upload size to 1MB for testing
+        with patch.dict(os.environ, {"MAX_UPLOAD_SIZE_MB": "1"}, clear=False):
+            large_content = b"A" * (2 * 1024 * 1024)  # 2MB
+            response = client.post(
+                "/api/documents/upload",
+                files={"file": ("large_doc.txt", large_content, "text/plain")},
+            )
+            assert response.status_code == 413
+            assert "exceeds maximum allowed size" in response.json()["detail"]
+
+    def test_upload_path_traversal_is_sanitized(self):
+        traversal_name = "../../etc/passwd.txt"
+        content = b"Full Name: Test User\n"
+        doc_id = None
+        try:
+            response = client.post(
+                "/api/documents/upload",
+                files={"file": (traversal_name, content, "text/plain")},
+            )
+            assert response.status_code == 200
+            data = response.json()
+            # Stored filename must not contain directory traversal slashes
+            assert "/" not in data["filename"]
+            assert "\\" not in data["filename"]
+            assert ".." not in data["filename"]
+            doc_id = data["document_id"]
+        finally:
+            if doc_id:
+                client.delete(f"/api/documents/{doc_id}")
+
+    def test_uploaded_document_integrates_with_pipeline_tools(self):
+        """Verify uploaded document is readable, searchable, and fact-extractable."""
+        from app.tools.documents import read_document, search_documents, extract_document_facts
+        import json
+
+        filename = "test_pipeline_doc.txt"
+        content = b"Full Name: Jane Doe\nDate of Birth: 15 August 1995\nNationality: Canadian\n"
+        doc_id = None
+
+        try:
+            res = client.post(
+                "/api/documents/upload",
+                files={"file": (filename, content, "text/plain")},
+            )
+            assert res.status_code == 200
+            doc_id = res.json()["document_id"]
+
+            # 1. read_document tool
+            read_res = json.loads(read_document._tool_func(document_id=doc_id))
+            assert "content" in read_res
+            assert "Jane Doe" in read_res["content"]
+
+            # 2. search_documents tool
+            search_res = json.loads(search_documents._tool_func(query="Jane Doe Canadian"))
+            assert len(search_res["results"]) > 0
+            matching_hit = next((r for r in search_res["results"] if r["document_id"] == doc_id), None)
+            assert matching_hit is not None
+
+            # 3. extract_document_facts tool
+            facts_res = json.loads(extract_document_facts._tool_func(
+                document_id=doc_id,
+                requested_fields="full_name,date_of_birth,nationality",
+            ))
+            extracted = {f["field"]: f["value"] for f in facts_res["extracted_facts"]}
+            assert extracted.get("full_name") == "Jane Doe"
+            assert extracted.get("date_of_birth") == "15 August 1995"
+            assert extracted.get("nationality") == "Canadian"
+
+        finally:
+            if doc_id:
+                client.delete(f"/api/documents/{doc_id}")
+
+    def test_delete_nonexistent_document_returns_404(self):
+        response = client.delete("/api/documents/nonexistent_id_12345")
+        assert response.status_code == 404
+

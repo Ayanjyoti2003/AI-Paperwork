@@ -130,20 +130,35 @@ def discover_workflow(user_goal: str) -> str:
             "workflow_name": best_wf.get("workflow_name", best_wf["workflow_id"]),
             "confidence": round(best_score, 2),
             "reason": best_reason,
+            "dynamically_generated": False,
         }, indent=2)
 
-    return json.dumps({
-        "status": "workflow_not_found",
-        "message": f"No suitable workflow could be confidently identified for goal: '{user_goal}'.",
-        "available_workflows": [
-            {
-                "workflow_id": w["workflow_id"],
-                "workflow_name": w.get("workflow_name", w["workflow_id"]),
-                "description": w.get("description", ""),
-            }
-            for w in loaded_workflows
-        ],
-    }, indent=2)
+    # If no existing workflow meets threshold, dynamically generate and register one for the goal
+    try:
+        from app.workflow_generator import generate_and_register_workflow
+        generated = generate_and_register_workflow(user_goal)
+        return json.dumps({
+            "status": "found",
+            "workflow_id": generated["workflow_id"],
+            "workflow_name": generated.get("workflow_name", generated["workflow_id"]),
+            "confidence": 0.95,
+            "reason": f"Dynamically generated checklist and verification rules for '{user_goal}'",
+            "dynamically_generated": True,
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            "status": "workflow_not_found",
+            "message": f"Could not find or generate workflow for goal: '{user_goal}'. Error: {e}",
+            "available_workflows": [
+                {
+                    "workflow_id": w["workflow_id"],
+                    "workflow_name": w.get("workflow_name", w["workflow_id"]),
+                    "description": w.get("description", ""),
+                }
+                for w in loaded_workflows
+            ],
+        }, indent=2)
+
 
 
 @tool

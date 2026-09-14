@@ -36,24 +36,96 @@ def _create_model():
     """Create the model provider based on environment variables.
 
     Supports:
-        MODEL_PROVIDER=openai   -> OpenAIModel (requires OPENAI_API_KEY)
-        MODEL_PROVIDER=anthropic -> AnthropicModel (requires ANTHROPIC_API_KEY)
-
-    If MODEL_PROVIDER is not set, defaults to 'openai'.
+        MODEL_PROVIDER=groq        -> OpenAIModel with Groq endpoint (FREE tier open source models: Llama 3.3, DeepSeek R1)
+        MODEL_PROVIDER=ollama      -> OpenAIModel with local Ollama endpoint (100% Free local models)
+        MODEL_PROVIDER=openrouter  -> OpenAIModel with OpenRouter endpoint (FREE tier models available)
+        MODEL_PROVIDER=local       -> OpenAIModel with custom local base_url (LM Studio, vLLM)
+        MODEL_PROVIDER=openai      -> OpenAIModel (requires OPENAI_API_KEY)
+        MODEL_PROVIDER=anthropic   -> AnthropicModel (requires ANTHROPIC_API_KEY)
     """
+    from strands.models.openai import OpenAIModel
+
     provider = os.environ.get("MODEL_PROVIDER", "openai").lower()
     model_id = os.environ.get("MODEL_ID", "")
 
-    if provider == "openai":
+    if provider == "groq":
+        api_key = os.environ.get("GROQ_API_KEY", "")
+        if not api_key or api_key.startswith("your-"):
+            raise ValueError(
+                "GROQ_API_KEY is not set. Get a free key at https://console.groq.com/keys "
+                "and add it to your .env file."
+            )
+        if not model_id:
+            model_id = "llama-3.3-70b-versatile"
+
+        model = OpenAIModel(
+            client_args={
+                "api_key": api_key,
+                "base_url": "https://api.groq.com/openai/v1",
+            },
+            model_id=model_id,
+            params={"max_tokens": 4096, "temperature": 0.2},
+        )
+        logger.info(f"Using Groq (Open Source) provider with model: {model_id}")
+        return model
+
+    elif provider == "ollama":
+        base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+        if not model_id:
+            model_id = "llama3.2"
+
+        model = OpenAIModel(
+            client_args={
+                "api_key": "ollama",
+                "base_url": base_url,
+            },
+            model_id=model_id,
+            params={"max_tokens": 4096, "temperature": 0.2},
+        )
+        logger.info(f"Using Ollama local provider ({base_url}) with model: {model_id}")
+        return model
+
+    elif provider == "openrouter":
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        if not api_key or api_key.startswith("your-"):
+            raise ValueError("OPENROUTER_API_KEY is not set. Get a free key at https://openrouter.ai")
+        if not model_id:
+            model_id = "meta-llama/llama-3.2-3b-instruct:free"
+
+        model = OpenAIModel(
+            client_args={
+                "api_key": api_key,
+                "base_url": "https://openrouter.ai/api/v1",
+            },
+            model_id=model_id,
+            params={"max_tokens": 4096, "temperature": 0.2},
+        )
+        logger.info(f"Using OpenRouter provider with model: {model_id}")
+        return model
+
+    elif provider == "local":
+        base_url = os.environ.get("OPENAI_BASE_URL", os.environ.get("LOCAL_BASE_URL", "http://localhost:1234/v1"))
+        if not model_id:
+            model_id = "local-model"
+
+        model = OpenAIModel(
+            client_args={
+                "api_key": "not-needed",
+                "base_url": base_url,
+            },
+            model_id=model_id,
+            params={"max_tokens": 4096, "temperature": 0.2},
+        )
+        logger.info(f"Using Local provider ({base_url}) with model: {model_id}")
+        return model
+
+    elif provider == "openai":
         api_key = os.environ.get("OPENAI_API_KEY", "")
         if not api_key or api_key.startswith("your-"):
             raise ValueError(
                 "OPENAI_API_KEY is not set or is a placeholder. "
                 "Set it in your .env file or as an environment variable."
             )
-
-        from strands.models.openai import OpenAIModel
-
         if not model_id:
             model_id = "gpt-4o"
 
@@ -89,8 +161,9 @@ def _create_model():
 
     else:
         raise ValueError(
-            f"Unsupported MODEL_PROVIDER: {provider}. Supported values: openai, anthropic"
+            f"Unsupported MODEL_PROVIDER: {provider}. Supported values: groq, ollama, openrouter, local, openai, anthropic"
         )
+
 
 
 def create_agent(
@@ -190,28 +263,30 @@ def assess_paperwork_deterministic(goal: str):
     available_docs = docs_data.get("documents", [])
 
     # 4. Extract facts with provenance across documents
+    # Dynamically gather all fields declared across requirements
+    all_req_fields = set()
+    for req in requirements:
+        for f in req.get("relevant_fields", []):
+            if f and f != "photograph":
+                all_req_fields.add(f)
+
+    # Standard universal administrative fields
+    universal_fields = {
+        "full_name", "date_of_birth", "address", "id_number", 
+        "nationality", "qualification", "institution", "employer"
+    }
+    target_fields = sorted(all_req_fields.union(universal_fields))
+    fields_str = ",".join(target_fields)
+
     all_facts = []
     for doc in available_docs:
-        fname = doc["filename"].lower()
         doc_id = doc["document_id"]
-
-        if "identity" in fname or "passport" in fname or "id" in fname:
-            fields = "full_name,date_of_birth,nationality,id_number,address"
-        elif "address" in fname or "bill" in fname or "utility" in fname:
-            fields = "name,address"
-        elif "certificate" in fname or "degree" in fname or "diploma" in fname:
-            fields = "full_name,date_of_birth,qualification,institution"
-        else:
-            fields = ",".join(
-                f for r in requirements for f in r.get("relevant_fields", [])
-                if f != "photograph"
-            )
-
-        facts_raw = extract_document_facts._tool_func(document_id=doc_id, requested_fields=fields)
+        facts_raw = extract_document_facts._tool_func(document_id=doc_id, requested_fields=fields_str)
         facts_data = json.loads(facts_raw)
         for fact in facts_data.get("extracted_facts", []):
             if fact.get("value"):
                 all_facts.append(fact)
+
 
     # 5. Authoritative deterministic verification
     assessment_raw = verify_requirements._tool_func(
