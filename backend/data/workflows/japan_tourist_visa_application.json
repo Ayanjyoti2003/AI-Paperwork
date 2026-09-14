@@ -1,0 +1,55 @@
+{
+    "workflow_id": "japan_tourist_visa_application",
+    "workflow_name": "Japanese Tourist Visa Application Process",
+    "description": "To apply for a Japanese tourist visa, submit the required documents and information, including proof of address, travel plans, and financial means.",
+    "requirements": [
+        {
+            "id": "req_1",
+            "name": "Proof of Address",
+            "description": "A utility bill or bank statement showing your current address, dated within 3 months.",
+            "required": true,
+            "accepted_evidence_types": [
+                "utility_bill",
+                "bank_statement"
+            ],
+            "relevant_fields": [
+                "full_name",
+                "address",
+                "date_of_birth"
+            ],
+            "validation_hints": "The document must be issued within the last 3 months and show your current address."
+        },
+        {
+            "id": "req_2",
+            "name": "Travel Plans",
+            "description": "A confirmed flight itinerary or travel agency documents showing your travel plans.",
+            "required": true,
+            "accepted_evidence_types": [
+                "flight_itinerary",
+                "travel_agency_documents"
+            ],
+            "relevant_fields": [
+                "full_name",
+                "travel_dates",
+                "destination"
+            ],
+            "validation_hints": "The travel plans must be confirmed and show the dates of your trip."
+        },
+        {
+            "id": "req_3",
+            "name": "Financial Means",
+            "description": "Proof of sufficient financial means to support yourself during your stay in Japan.",
+            "required": true,
+            "accepted_evidence_types": [
+                "bank_statement",
+                "investment_documents"
+            ],
+            "relevant_fields": [
+                "full_name",
+                "bank_account_number",
+                "balance"
+            ],
+            "validation_hints": "The financial means must be sufficient to cover your stay in Japan."
+        }
+    ]
+}

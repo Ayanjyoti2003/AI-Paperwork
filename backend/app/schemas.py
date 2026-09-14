@@ -24,6 +24,19 @@ class Document(BaseModel):
     )
 
 
+class DocumentUploadResponse(BaseModel):
+    """Response returned upon successful document upload."""
+
+    document_id: str = Field(description="Stable identifier for the stored document")
+    filename: str = Field(description="Sanitized stored filename")
+    original_filename: str = Field(description="Original uploaded filename")
+    file_type: str = Field(description="File extension (e.g., txt, md, json, pdf)")
+    size_bytes: int = Field(description="Stored file size in bytes")
+    modified_at: str = Field(description="Creation or modification timestamp")
+    message: str = Field(default="Document uploaded and indexed successfully.", description="Status message")
+
+
+
 class DocumentSearchResult(BaseModel):
     """A single search hit."""
 

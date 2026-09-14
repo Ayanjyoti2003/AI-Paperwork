@@ -1,0 +1,61 @@
+{
+    "workflow_id": "apply_for_canadian_study_permit",
+    "workflow_name": "Apply For Canadian Study Permit Checklist",
+    "description": "Automated compliance checklist and verification schema for Apply For Canadian Study Permit.",
+    "requirements": [
+        {
+            "id": "req_identity",
+            "name": "Proof of Identity",
+            "description": "Government-issued photo identification (Aadhaar Card, Passport, Driver's License, Voter ID, or National ID Card).",
+            "required": true,
+            "accepted_evidence_types": [
+                "aadhaar_card",
+                "passport",
+                "drivers_license",
+                "voter_id",
+                "national_id"
+            ],
+            "relevant_fields": [
+                "full_name",
+                "id_number",
+                "date_of_birth"
+            ],
+            "validation_hints": "Must be a valid, unexpired government-issued document displaying full legal name."
+        },
+        {
+            "id": "req_address",
+            "name": "Proof of Current Address",
+            "description": "Recent utility bill, bank account statement, rental agreement, or official residency proof.",
+            "required": true,
+            "accepted_evidence_types": [
+                "utility_bill",
+                "bank_statement",
+                "aadhaar_card",
+                "rent_agreement",
+                "official_letter"
+            ],
+            "relevant_fields": [
+                "full_name",
+                "address"
+            ],
+            "validation_hints": "Must match the applicant's current residential address and be recently dated if a recurring utility bill."
+        },
+        {
+            "id": "req_dob",
+            "name": "Proof of Date of Birth",
+            "description": "Birth Certificate, Aadhaar Card, Matriculation Certificate, or Passport.",
+            "required": true,
+            "accepted_evidence_types": [
+                "birth_certificate",
+                "aadhaar_card",
+                "matriculation_certificate",
+                "passport"
+            ],
+            "relevant_fields": [
+                "full_name",
+                "date_of_birth"
+            ],
+            "validation_hints": "Date of birth must be consistent across all submitted documents without discrepancy."
+        }
+    ]
+}

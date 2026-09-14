@@ -7,14 +7,20 @@ via CORS and OpenAPI documentation.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import os
-import re
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
+import re
+import sys
+import uuid
 from typing import Any
+
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
@@ -30,9 +36,17 @@ from app.agent import (
     assess_paperwork_deterministic,
     get_model_status,
 )
-from app.schemas import ReadinessAssessment
-from app.tools.documents import DOCUMENTS_DIR, SUPPORTED_EXTENSIONS, list_documents
+from app.schemas import DocumentUploadResponse, ReadinessAssessment
+from app.tools.documents import (
+    DOCUMENTS_DIR,
+    SUPPORTED_EXTENSIONS,
+    _get_file_metadata,
+    _make_document_id,
+    list_documents,
+)
 from app.tools.requirements import WORKFLOWS_DIR
+
+
 
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(_BACKEND_DIR / ".env")
@@ -91,9 +105,13 @@ class WorkflowSummary(BaseModel):
 class DocumentUploadResponse(BaseModel):
     """Response model for uploaded document."""
 
-    filename: str
-    size_bytes: int
-    message: str = "File uploaded successfully"
+    document_id: str = Field(description="Stable identifier for the stored document")
+    filename: str = Field(description="Sanitized stored filename")
+    original_filename: str = Field(description="Original uploaded filename")
+    file_type: str = Field(description="File extension")
+    size_bytes: int = Field(description="Stored file size in bytes")
+    modified_at: str = Field(description="Creation or modification timestamp")
+    message: str = Field(default="File uploaded successfully", description="Status message")
 
 
 class PreparePackageRequest(BaseModel):
@@ -171,6 +189,218 @@ async def get_workflows() -> list[WorkflowSummary]:
     return workflows
 
 
+class GenerateWorkflowRequest(BaseModel):
+    """Request model for on-the-fly workflow schema generation."""
+    user_goal: str = Field(..., description="Target paperwork goal or document checklist name")
+
+
+@app.post("/api/workflows/generate", summary="Generate Workflow Schema on Demand")
+async def generate_workflow_endpoint(request: GenerateWorkflowRequest) -> dict[str, Any]:
+    """Generate and register a structured workflow schema dynamically for any goal."""
+    from app.workflow_generator import generate_and_register_workflow
+
+    goal = request.user_goal.strip()
+    if not goal:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_goal must not be empty.",
+        )
+
+    try:
+        wf = generate_and_register_workflow(goal)
+        return {
+            "status": "success",
+            "workflow": wf,
+            "message": f"Successfully registered workflow schema for '{wf.get('workflow_name')}'",
+        }
+    except Exception as e:
+        logger.exception(f"Failed to generate workflow: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate workflow: {str(e)}",
+        )
+
+
+
+async def _process_and_save_upload(file: UploadFile) -> DocumentUploadResponse:
+    """Validate, sanitize, and store an uploaded document in the local document store."""
+    if not file or not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No file provided or filename is empty.",
+        )
+
+    # Sanitize and strip path traversal attempts
+    raw_filename = os.path.basename(file.filename.strip())
+    if not raw_filename or raw_filename in {".", ".."}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or unsafe filename provided.",
+        )
+
+    # Check file extension against supported types
+    ext = Path(raw_filename).suffix.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        supported_str = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported file type '{ext}'. Supported formats: {supported_str}",
+        )
+
+    # Size limit validation
+    max_mb = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "10"))
+    max_bytes = max_mb * 1024 * 1024
+
+    try:
+        content = await file.read()
+    except Exception as e:
+        logger.error(f"Failed to read uploaded file stream: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to read file content.",
+        )
+
+    if len(content) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty.",
+        )
+
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=getattr(status, "HTTP_413_CONTENT_TOO_LARGE", 413),
+            detail=f"File exceeds maximum allowed size of {max_mb} MB.",
+        )
+
+
+    # Generate sanitized filename
+    stem = Path(raw_filename).stem
+    clean_stem = re.sub(r"[^\w\s\.-]", "", stem).strip()
+    clean_stem = re.sub(r"\s+", "_", clean_stem)
+    if not clean_stem:
+        clean_stem = f"doc_{hashlib.md5(content).hexdigest()[:8]}"
+
+    target_filename = f"{clean_stem}{ext}"
+
+    # Ensure document storage directory exists
+    DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    target_path = DOCUMENTS_DIR / target_filename
+
+    # Prevent collision if different content already exists with identical name
+    if target_path.exists():
+        try:
+            existing_content = target_path.read_bytes()
+            if existing_content != content:
+                content_hash = hashlib.md5(content).hexdigest()[:6]
+                target_filename = f"{clean_stem}_{content_hash}{ext}"
+                target_path = DOCUMENTS_DIR / target_filename
+        except Exception:
+            pass
+
+    try:
+        target_path.write_bytes(content)
+    except Exception as e:
+        logger.exception(f"Failed to save document to local storage: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to write document to local storage.",
+        )
+
+    doc_id = _make_document_id(target_filename)
+    meta = _get_file_metadata(target_path)
+    logger.info(
+        f"Uploaded document '{target_filename}' (doc_id: {doc_id}, size: {meta['size_bytes']} bytes)"
+    )
+
+    return DocumentUploadResponse(
+        document_id=doc_id,
+        filename=target_filename,
+        original_filename=raw_filename,
+        file_type=ext.lstrip("."),
+        size_bytes=meta["size_bytes"],
+        modified_at=meta["modified_at"],
+        message="Document uploaded and indexed successfully.",
+    )
+
+
+@app.post(
+    "/api/documents/upload",
+    response_model=DocumentUploadResponse,
+    summary="Upload Document",
+    responses={
+        400: {"description": "Invalid filename or empty file"},
+        413: {"description": "File exceeds maximum size limit"},
+        415: {"description": "Unsupported file format"},
+        500: {"description": "Storage write failure"},
+    },
+)
+async def upload_document(file: UploadFile = File(...)) -> DocumentUploadResponse:
+    """Upload a supported document to the controlled local document storage.
+
+    Validates file format, enforces size limits, safely sanitizes filenames,
+    and indexes the document so it is immediately discoverable by all document
+    and verification tools.
+    """
+    return await _process_and_save_upload(file)
+
+
+@app.post(
+    "/api/documents",
+    response_model=DocumentUploadResponse,
+    summary="Upload Document (Alias)",
+    include_in_schema=False,
+)
+async def upload_document_alias(file: UploadFile = File(...)) -> DocumentUploadResponse:
+    """Alias for /api/documents/upload."""
+    return await _process_and_save_upload(file)
+
+
+@app.delete(
+    "/api/documents/{document_id}",
+    summary="Delete Document",
+    responses={
+        404: {"description": "Document not found"},
+        500: {"description": "Failed to delete document"},
+    },
+)
+async def delete_document(document_id: str) -> dict[str, Any]:
+    """Delete a document from local storage by its document_id."""
+    if not DOCUMENTS_DIR.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Documents storage directory not found.",
+        )
+
+    target_path = None
+    for path in DOCUMENTS_DIR.iterdir():
+        if path.is_file() and _make_document_id(path.name) == document_id:
+            target_path = path
+            break
+
+    if target_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document with ID '{document_id}' was not found.",
+        )
+
+    try:
+        filename = target_path.name
+        target_path.unlink()
+        logger.info(f"Deleted document '{filename}' (doc_id: {document_id})")
+        return {
+            "status": "deleted",
+            "document_id": document_id,
+            "filename": filename,
+            "message": "Document deleted successfully.",
+        }
+    except Exception as e:
+        logger.exception(f"Failed to delete document {document_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete document from storage.",
+        )
+
+
 @app.get("/api/documents", summary="List Documents")
 async def get_documents() -> dict[str, Any]:
     """Return user documents currently available in the document store.
@@ -186,6 +416,7 @@ async def get_documents() -> dict[str, Any]:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve available documents.",
         )
+
 
 
 @app.post(
@@ -221,7 +452,8 @@ async def assess(request: AssessRequest) -> ReadinessAssessment:
 
     try:
         if model_status == ModelStatus.LIVE_READY:
-            logger.info("Executing LIVE STRANDS AGENT assessment...")
+            provider = os.environ.get("MODEL_PROVIDER", "openai").lower()
+            logger.info(f"Executing LIVE STRANDS AGENT assessment with {provider}...")
             try:
                 return assess_paperwork(cleaned_goal)
             except Exception as e:
@@ -258,81 +490,6 @@ async def assess(request: AssessRequest) -> ReadinessAssessment:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while assessing paperwork.",
         )
-
-
-@app.post(
-    "/api/documents/upload",
-    response_model=DocumentUploadResponse,
-    summary="Upload User Document",
-    responses={
-        400: {"description": "Invalid file, unsupported extension, or path traversal attempt"},
-        500: {"description": "Failed to save uploaded file"},
-    },
-)
-async def upload_document(file: UploadFile = File(...)) -> DocumentUploadResponse:
-    """Safely upload a user document to the local document vault.
-
-    Security & Safety guarantees:
-    - Path traversal protection: extracts basename via Path(name).name and resolves against DOCUMENTS_DIR.
-    - Supported extensions validation: (.txt, .md, .json, .pdf, .png, .jpg, .jpeg).
-    - Accidental overwrite protection: generates collision-free suffix if file exists.
-    - Files are strictly stored as static data and never executed.
-    """
-    raw_filename = file.filename or "upload.txt"
-    filename_only = Path(raw_filename).name
-    safe_filename = re.sub(r"[^a-zA-Z0-9_.-]", "_", filename_only)
-    if not safe_filename or safe_filename.startswith("."):
-        safe_filename = f"upload_{uuid.uuid4().hex[:6]}.txt"
-
-    ext = Path(safe_filename).suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file extension '{ext}'. Allowed extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
-        )
-
-    target_dir = DOCUMENTS_DIR.resolve()
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    initial_target = (target_dir / safe_filename).resolve()
-    if not initial_target.is_relative_to(target_dir):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid filename or path traversal detected.",
-        )
-
-    # Collision avoidance: protect existing demo and user documents from accidental overwrite
-    target_path = initial_target
-    if target_path.exists():
-        stem = target_path.stem
-        suffix = target_path.suffix
-        unique_name = f"{stem}_{uuid.uuid4().hex[:6]}{suffix}"
-        target_path = (target_dir / unique_name).resolve()
-
-    try:
-        content = await file.read()
-        max_bytes = 10 * 1024 * 1024  # 10 MB limit
-        if len(content) > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File size exceeds maximum allowed limit of 10MB.",
-            )
-        target_path.write_bytes(content)
-        logger.info(f"Safely uploaded document: {target_path.name} ({len(content)} bytes)")
-        return DocumentUploadResponse(
-            filename=target_path.name,
-            size_bytes=len(content),
-            message="File uploaded successfully",
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Failed to save uploaded file: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while saving the uploaded document.",
-        )
-
 
 @app.post(
     "/api/package/prepare",

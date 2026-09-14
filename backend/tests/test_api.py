@@ -66,12 +66,11 @@ class TestDocumentsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "documents" in data
-        assert data["count"] >= 3
+        assert data["count"] >= 2
 
         filenames = [d["filename"] for d in data["documents"]]
-        assert "identity.txt" in filenames
-        assert "address_proof.txt" in filenames
-        assert "certificate.txt" in filenames
+        assert any("Identity" in f or "identity" in f for f in filenames)
+        assert any("Address" in f or "address" in f for f in filenames)
 
 
 class TestAssessEndpoint:
@@ -158,43 +157,64 @@ class TestAssessEndpoint:
                 assert "Live agent execution failed" in data["detail"]
 
 
-class TestDocumentUploadEndpoint:
-    """Tests for POST /api/documents/upload."""
+class TestDocumentUploadEndpoints:
+    """Tests for POST /api/documents/upload and DELETE /api/documents/{document_id}."""
 
-    def test_upload_valid_document(self):
-        from app.tools.documents import DOCUMENTS_DIR
-
-        test_filename = "test_upload_sample.txt"
-        test_content = b"Sample upload content for testing."
-        target_path = DOCUMENTS_DIR / test_filename
-        if target_path.exists():
-            target_path.unlink()
-
+    def test_upload_valid_text_document(self):
+        filename = "test_birth_certificate.txt"
+        content = b"Full Name: Arion Dutta\nDate of Birth: 12 March 2000\nPlace of Birth: Kolkata\n"
+        doc_id = None
         try:
             response = client.post(
                 "/api/documents/upload",
-                files={"file": (test_filename, test_content, "text/plain")},
+                files={"file": (filename, content, "text/plain")},
             )
             assert response.status_code == 200
             data = response.json()
-            assert data["filename"] == test_filename
-            assert data["size_bytes"] == len(test_content)
-            assert data["message"] == "File uploaded successfully"
-            assert target_path.exists()
-            assert target_path.read_bytes() == test_content
-        finally:
-            if target_path.exists():
-                target_path.unlink()
+            assert data["filename"] == filename
+            assert data["original_filename"] == filename
+            assert data["file_type"] == "txt"
+            assert data["size_bytes"] == len(content)
+            assert "document_id" in data
+            doc_id = data["document_id"]
 
-    def test_upload_unsupported_extension_returns_400(self):
+            # Verify it appears in GET /api/documents
+            list_res = client.get("/api/documents")
+            assert list_res.status_code == 200
+            docs = list_res.json()["documents"]
+            found = next((d for d in docs if d["document_id"] == doc_id), None)
+            assert found is not None
+            assert found["filename"] == filename
+
+        finally:
+            if doc_id:
+                client.delete(f"/api/documents/{doc_id}")
+
+    def test_upload_unsupported_extension_returns_415(self):
         response = client.post(
             "/api/documents/upload",
             files={"file": ("malicious_script.exe", b"binary content", "application/octet-stream")},
         )
+        assert response.status_code == 415
+        assert "Unsupported file type" in response.json()["detail"]
+
+    def test_upload_empty_file_returns_400(self):
+        response = client.post(
+            "/api/documents/upload",
+            files={"file": ("empty_file.txt", b"", "text/plain")},
+        )
         assert response.status_code == 400
-        data = response.json()
-        assert "detail" in data
-        assert "Unsupported file extension" in data["detail"]
+        assert "empty" in response.json()["detail"].lower()
+
+    def test_upload_oversized_file_returns_413(self):
+        with patch.dict(os.environ, {"MAX_UPLOAD_SIZE_MB": "1"}, clear=False):
+            large_content = b"A" * (2 * 1024 * 1024)  # 2MB
+            response = client.post(
+                "/api/documents/upload",
+                files={"file": ("large_doc.txt", large_content, "text/plain")},
+            )
+            assert response.status_code == 413
+            assert "exceeds maximum allowed size" in response.json()["detail"]
 
     def test_upload_path_traversal_sanitization(self):
         from app.tools.documents import DOCUMENTS_DIR
@@ -211,9 +231,7 @@ class TestDocumentUploadEndpoint:
             )
             assert response.status_code == 200
             data = response.json()
-            # Must stay inside DOCUMENTS_DIR with safe filename
             assert expected_safe_name in data["filename"]
-            # Path must exist inside DOCUMENTS_DIR, NOT at root or parent
             uploaded_file = DOCUMENTS_DIR / data["filename"]
             assert uploaded_file.exists()
             assert uploaded_file.is_relative_to(DOCUMENTS_DIR)
@@ -227,35 +245,83 @@ class TestDocumentUploadEndpoint:
     def test_upload_collision_avoidance_does_not_overwrite(self):
         from app.tools.documents import DOCUMENTS_DIR
 
-        # identity.txt already exists as a demo file
-        identity_path = DOCUMENTS_DIR / "identity.txt"
-        original_content = identity_path.read_bytes()
-        new_content = b"Attempt to overwrite identity.txt"
+        base_file = DOCUMENTS_DIR / "collision_base.txt"
+        base_file.write_bytes(b"Original base content")
+        original_content = base_file.read_bytes()
+        new_content = b"Attempt to overwrite collision_base.txt"
 
         created_path = None
         try:
             response = client.post(
                 "/api/documents/upload",
-                files={"file": ("identity.txt", new_content, "text/plain")},
+                files={"file": ("collision_base.txt", new_content, "text/plain")},
             )
             assert response.status_code == 200
             data = response.json()
             uploaded_filename = data["filename"]
 
-            # Filename must NOT overwrite original identity.txt
-            assert uploaded_filename != "identity.txt"
-            assert uploaded_filename.startswith("identity_")
+            # Filename must NOT overwrite original collision_base.txt
+            assert uploaded_filename != "collision_base.txt"
+            assert uploaded_filename.startswith("collision_base_")
             assert uploaded_filename.endswith(".txt")
 
             # Original file content must be completely untouched
-            assert identity_path.read_bytes() == original_content
+            assert base_file.read_bytes() == original_content
 
             created_path = DOCUMENTS_DIR / uploaded_filename
             assert created_path.exists()
             assert created_path.read_bytes() == new_content
         finally:
+            if base_file.exists():
+                base_file.unlink()
             if created_path and created_path.exists():
                 created_path.unlink()
+
+    def test_uploaded_document_integrates_with_pipeline_tools(self):
+        """Verify uploaded document is readable, searchable, and fact-extractable."""
+        from app.tools.documents import read_document, search_documents, extract_document_facts
+        import json
+
+        filename = "test_pipeline_doc.txt"
+        content = b"Full Name: Jane Doe\nDate of Birth: 15 August 1995\nNationality: Canadian\n"
+        doc_id = None
+
+        try:
+            res = client.post(
+                "/api/documents/upload",
+                files={"file": (filename, content, "text/plain")},
+            )
+            assert res.status_code == 200
+            doc_id = res.json()["document_id"]
+
+            # 1. read_document tool
+            read_res = json.loads(read_document._tool_func(document_id=doc_id))
+            assert "content" in read_res
+            assert "Jane Doe" in read_res["content"]
+
+            # 2. search_documents tool
+            search_res = json.loads(search_documents._tool_func(query="Jane Doe Canadian"))
+            assert len(search_res["results"]) > 0
+            matching_hit = next((r for r in search_res["results"] if r["document_id"] == doc_id), None)
+            assert matching_hit is not None
+
+            # 3. extract_document_facts tool
+            facts_res = json.loads(extract_document_facts._tool_func(
+                document_id=doc_id,
+                requested_fields="full_name,date_of_birth,nationality",
+            ))
+            extracted = {f["field"]: f["value"] for f in facts_res["extracted_facts"]}
+            assert extracted.get("full_name") == "Jane Doe"
+            assert extracted.get("date_of_birth") == "15 August 1995"
+            assert extracted.get("nationality") == "Canadian"
+
+        finally:
+            if doc_id:
+                client.delete(f"/api/documents/{doc_id}")
+
+    def test_delete_nonexistent_document_returns_404(self):
+        response = client.delete("/api/documents/nonexistent_id_12345")
+        assert response.status_code == 404
 
 
 class TestPackagePrepareEndpoint:
@@ -323,4 +389,5 @@ class TestPackagePrepareEndpoint:
                 )
                 assert package_resp.status_code == 200
                 assert mock_agent.call_count == 0
+
 

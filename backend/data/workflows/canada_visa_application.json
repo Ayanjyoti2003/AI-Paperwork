@@ -1,0 +1,51 @@
+{
+    "workflow_id": "canada_visa_application",
+    "workflow_name": "Canadian Visa Application Process",
+    "description": "Complete the Canadian visa application by submitting required documents and meeting eligibility criteria.",
+    "requirements": [
+        {
+            "id": "req_1",
+            "name": "Proof of Address",
+            "description": "A utility bill or bank statement showing your current address.",
+            "required": true,
+            "accepted_evidence_types": [
+                "utility_bill",
+                "bank_statement"
+            ],
+            "relevant_fields": [
+                "address",
+                "date_of_birth"
+            ],
+            "validation_hints": "The document must be dated within 3 months of the application date."
+        },
+        {
+            "id": "req_2",
+            "name": "Passport",
+            "description": "A valid passport with at least six months' validity.",
+            "required": true,
+            "accepted_evidence_types": [
+                "passport"
+            ],
+            "relevant_fields": [
+                "passport_number",
+                "passport_expiration_date"
+            ],
+            "validation_hints": "The passport must be valid for at least six months beyond the intended stay in Canada."
+        },
+        {
+            "id": "req_3",
+            "name": "Proof of Funds",
+            "description": "A bank statement or proof of income showing sufficient funds for the intended stay.",
+            "required": true,
+            "accepted_evidence_types": [
+                "bank_statement",
+                "proof_of_income"
+            ],
+            "relevant_fields": [
+                "bank_account_number",
+                "income"
+            ],
+            "validation_hints": "The funds must be sufficient to support the applicant's stay in Canada."
+        }
+    ]
+}

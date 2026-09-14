@@ -9,3 +9,5 @@ boto3>=1.34.0
 pillow>=10.0.0
 pypdfium2>=5.0.0
 rapidocr-onnxruntime>=1.2.0
+python-multipart>=0.0.9
+pytest>=8.0.0

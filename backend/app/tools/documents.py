@@ -391,7 +391,7 @@ def extract_document_facts(document_id: str, requested_fields: str) -> str:
 
     extracted = get_document_extraction(target_path)
     content = extracted.content
-    if content.startswith("["):
+    if content.startswith("[") and any(err in content for err in ["unavailable", "failed", "Unsupported"]):
         return json.dumps({
             "error": "Could not extract text from document",
             "detail": content,
@@ -460,8 +460,8 @@ def _extract_single_fact(
         "address": ["address", "residential address", "current address", "home address"],
         "phone": ["phone", "telephone", "mobile", "contact number"],
         "email": ["email", "e-mail", "email address"],
-        "nationality": ["nationality", "citizenship"],
-        "id number": ["id number", "identification number", "id no"],
+        "nationality": ["nationality", "citizenship", "country"],
+        "id number": ["id number", "identification number", "id no", "document number", "card number"],
         "photograph": ["photograph", "photo", "passport photo"],
     }
 
@@ -473,7 +473,22 @@ def _extract_single_fact(
 
     # Search for the field in content
     for variant in field_variants:
-        # Look for patterns like "Field: Value" or "Field - Value"
+        # 1. Look for multiline patterns (e.g., "Residential Address:\n12 MG Road...")
+        multiline_match = re.search(rf"(?im)^\s*{re.escape(variant)}\s*:\s*\n((?:[^\n:]+\n?){{1,4}})", content)
+        if multiline_match:
+            lines = [l.strip() for l in multiline_match.group(1).split("\n") if l.strip()]
+            if lines:
+                val = ", ".join(lines)
+                return {
+                    "field": field,
+                    "value": val,
+                    "source_document": doc_id,
+                    "source_page": None,
+                    "confidence": "high",
+                    "evidence_snippet": multiline_match.group(0)[:300],
+                }
+
+        # 2. Look for single line patterns like "Field: Value" or "Field - Value"
         patterns = [
             rf"(?i){re.escape(variant)}\s*[:=\-–]\s*(.+)",
             rf"(?i)\b{re.escape(variant)}\b[:\s]+(.+)",
@@ -484,23 +499,24 @@ def _extract_single_fact(
                 value = match.group(1).strip()
                 # Clean up the value (take first line only)
                 value = value.split("\n")[0].strip()
-                # Get surrounding context for evidence
-                start = max(0, match.start() - 20)
-                end = min(len(content), match.end() + 50)
-                snippet = content[start:end].strip()
-                page_num = _detect_page_number(match.start(), content)
-                conf = ocr_confidence if (extraction_method != "native_text" and ocr_confidence is not None) else "high"
+                if value:
+                    # Get surrounding context for evidence
+                    start = max(0, match.start() - 20)
+                    end = min(len(content), match.end() + 50)
+                    snippet = content[start:end].strip()
+                    page_num = _detect_page_number(match.start(), content)
+                    conf = ocr_confidence if (extraction_method != "native_text" and ocr_confidence is not None) else "high"
 
-                return {
-                    "field": field,
-                    "value": value,
-                    "source_document": doc_id,
-                    "source_page": page_num,
-                    "page_number": page_num,
-                    "confidence": conf,
-                    "evidence_snippet": snippet,
-                    "extraction_method": extraction_method,
-                }
+                    return {
+                        "field": field,
+                        "value": value,
+                        "source_document": doc_id,
+                        "source_page": page_num,
+                        "page_number": page_num,
+                        "confidence": conf,
+                        "evidence_snippet": snippet,
+                        "extraction_method": extraction_method,
+                    }
 
     # If not found via patterns, check if the field keyword exists at all
     found_anywhere = any(v in content_lower for v in field_variants)

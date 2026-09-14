@@ -1,0 +1,34 @@
+{
+    "workflow_id": "pan_card",
+    "workflow_name": "PAN Card Application (Form 49A)",
+    "description": "Application for issuance of Permanent Account Number (PAN) Card requiring Identity, Address, and Date of Birth verification.",
+    "requirements": [
+        {
+            "id": "req_pan_identity",
+            "name": "Proof of Identity",
+            "description": "Aadhaar Card, Passport, Voter ID Card, Driving License, or Arms License.",
+            "required": true,
+            "accepted_evidence_types": ["aadhaar_card", "passport", "voter_id", "driving_license"],
+            "relevant_fields": ["full_name", "id_number"],
+            "validation_hints": "Name must match the exact spelling desired on the PAN card."
+        },
+        {
+            "id": "req_pan_address",
+            "name": "Proof of Address",
+            "description": "Aadhaar Card, Passport, Voter ID, Electricity Bill, Water Bill, or Bank Account Statement (dated within 3 months).",
+            "required": true,
+            "accepted_evidence_types": ["aadhaar_card", "utility_bill", "bank_statement", "passport", "voter_id"],
+            "relevant_fields": ["full_name", "address"],
+            "validation_hints": "Must reflect current address where physical PAN card will be dispatched."
+        },
+        {
+            "id": "req_pan_dob",
+            "name": "Proof of Date of Birth",
+            "description": "Birth Certificate, Aadhaar Card, Matriculation Certificate, or Passport containing birth date.",
+            "required": true,
+            "accepted_evidence_types": ["birth_certificate", "aadhaar_card", "matriculation_certificate", "passport"],
+            "relevant_fields": ["full_name", "date_of_birth"],
+            "validation_hints": "Date of birth must be clearly legible and match identity proof."
+        }
+    ]
+}
