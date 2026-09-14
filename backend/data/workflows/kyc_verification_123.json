@@ -1,0 +1,39 @@
+{
+    "workflow_id": "kyc_verification_123",
+    "workflow_name": "Basic KYC Verification Process",
+    "description": "Complete a basic KYC verification by providing required documents and information.",
+    "requirements": [
+        {
+            "id": "req_1",
+            "name": "Proof of Identity",
+            "description": "A valid government-issued ID (e.g. passport, driver's license) or national ID card.",
+            "required": true,
+            "accepted_evidence_types": [
+                "passport",
+                "driver_license",
+                "national_id_card"
+            ],
+            "relevant_fields": [
+                "full_name",
+                "date_of_birth",
+                "address"
+            ],
+            "validation_hints": "ID must be issued within the last 5 years, names must match exactly."
+        },
+        {
+            "id": "req_2",
+            "name": "Proof of Address",
+            "description": "A utility bill or bank statement showing your current address.",
+            "required": true,
+            "accepted_evidence_types": [
+                "utility_bill",
+                "bank_statement"
+            ],
+            "relevant_fields": [
+                "address",
+                "date_of_birth"
+            ],
+            "validation_hints": "Document must be dated within the last 3 months, names must match exactly."
+        }
+    ]
+}

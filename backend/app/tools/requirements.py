@@ -130,7 +130,24 @@ def discover_workflow(user_goal: str) -> str:
             "workflow_name": best_wf.get("workflow_name", best_wf["workflow_id"]),
             "confidence": round(best_score, 2),
             "reason": best_reason,
+            "dynamically_generated": False,
         }, indent=2)
+
+    # If dynamic workflow generation is explicitly enabled via environment variable
+    if os.environ.get("AUTO_GENERATE_WORKFLOWS", "false").lower() in ("true", "1"):
+        try:
+            from app.workflow_generator import generate_and_register_workflow
+            generated = generate_and_register_workflow(user_goal)
+            return json.dumps({
+                "status": "found",
+                "workflow_id": generated["workflow_id"],
+                "workflow_name": generated.get("workflow_name", generated["workflow_id"]),
+                "confidence": 0.95,
+                "reason": f"Dynamically generated checklist and verification rules for '{user_goal}'",
+                "dynamically_generated": True,
+            }, indent=2)
+        except Exception:
+            pass
 
     return json.dumps({
         "status": "workflow_not_found",
@@ -144,6 +161,7 @@ def discover_workflow(user_goal: str) -> str:
             for w in loaded_workflows
         ],
     }, indent=2)
+
 
 
 @tool

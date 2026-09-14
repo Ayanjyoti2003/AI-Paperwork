@@ -1,0 +1,43 @@
+{
+    "workflow_id": "driving_license",
+    "workflow_name": "Driving License Application",
+    "description": "Application for a Learner or Permanent Driving License requiring age proof, address proof, and identity verification.",
+    "requirements": [
+        {
+            "id": "req_age_proof",
+            "name": "Proof of Age / Date of Birth",
+            "description": "Birth Certificate, School Certificate / 10th Marksheet, PAN Card, or Passport verifying applicant is of eligible age (18+ for motor vehicles).",
+            "required": true,
+            "accepted_evidence_types": ["birth_certificate", "school_certificate", "pan_card", "passport", "aadhaar_card"],
+            "relevant_fields": ["full_name", "date_of_birth"],
+            "validation_hints": "Date of birth must confirm applicant meets legal age requirement for driving category."
+        },
+        {
+            "id": "req_address_proof",
+            "name": "Proof of Current Address",
+            "description": "Valid address document such as Aadhaar Card, Electricity Bill, Ration Card, or Bank Statement within the regional transport office (RTO) jurisdiction.",
+            "required": true,
+            "accepted_evidence_types": ["aadhaar_card", "utility_bill", "bank_statement", "rent_agreement"],
+            "relevant_fields": ["full_name", "address"],
+            "validation_hints": "Current address must match applicant residence."
+        },
+        {
+            "id": "req_identity_proof",
+            "name": "Identity Proof",
+            "description": "Valid government-issued photo identity proof (Aadhaar, Passport, Voter ID, PAN).",
+            "required": true,
+            "accepted_evidence_types": ["aadhaar_card", "passport", "voter_id", "pan_card"],
+            "relevant_fields": ["full_name", "id_number"],
+            "validation_hints": "Full name must be spelled identically across all proofs."
+        },
+        {
+            "id": "req_medical_fitness",
+            "name": "Medical Certificate / Fitness Declaration",
+            "description": "Form 1-A medical fitness certificate or self-declaration of physical fitness for commercial / non-transport driving.",
+            "required": false,
+            "accepted_evidence_types": ["medical_certificate", "fitness_declaration"],
+            "relevant_fields": ["full_name", "doctor_signature", "fitness_status"],
+            "validation_hints": "Signed by a registered medical practitioner if applicant is above 40 years or applying for transport license."
+        }
+    ]
+}

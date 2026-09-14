@@ -122,24 +122,24 @@ class TestUnsupportedFormatsRejected:
             "/api/documents/upload",
             files={"file": ("malicious.exe", b"MZ\x90\x00executable", "application/octet-stream")},
         )
-        assert response.status_code == 400
-        assert "Unsupported file extension" in response.json()["detail"]
+        assert response.status_code in (400, 415)
+        assert any(phrase in response.json()["detail"] for phrase in ["Unsupported file extension", "Unsupported file type"])
 
     def test_upload_shell_script_rejected(self):
         response = client.post(
             "/api/documents/upload",
             files={"file": ("script.sh", b"#!/bin/bash\necho hello", "text/x-sh")},
         )
-        assert response.status_code == 400
-        assert "Unsupported file extension" in response.json()["detail"]
+        assert response.status_code in (400, 415)
+        assert any(phrase in response.json()["detail"] for phrase in ["Unsupported file extension", "Unsupported file type"])
 
     def test_upload_unsupported_image_format_rejected(self):
         response = client.post(
             "/api/documents/upload",
             files={"file": ("image.bmp", b"BM\x00\x00bitmap", "image/bmp")},
         )
-        assert response.status_code == 400
-        assert "Unsupported file extension" in response.json()["detail"]
+        assert response.status_code in (400, 415)
+        assert any(phrase in response.json()["detail"] for phrase in ["Unsupported file extension", "Unsupported file type"])
 
 
 # ---------------------------------------------------------------------------

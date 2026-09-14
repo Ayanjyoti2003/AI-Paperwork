@@ -72,9 +72,18 @@ export type DocumentItem = {
   extraction_method?: string | null;
 };
 
+export type DocumentListResponse = {
+  documents: DocumentItem[];
+  count: number;
+};
+
 export type DocumentUploadResponse = {
+  document_id?: string;
   filename: string;
+  original_filename?: string;
+  file_type?: string;
   size_bytes: number;
+  modified_at?: string;
   message: string;
 };
 

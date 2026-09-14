@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Icon } from "./icons";
 import { StatusPill } from "./ui/status-pill";
 import { Progress } from "./ui/progress";
@@ -11,9 +12,11 @@ import type {
 } from "@/lib/types";
 
 const suggestions = [
+  "I want to apply for an Indian passport.",
+  "I want to apply for a driving license.",
+  "Apply for a new PAN card.",
   "I want to complete the example application.",
-  "Apply for a passport",
-  "Prepare a scholarship application",
+  "Apply for a Canadian study permit.",
 ];
 
 function extractApplicantName(assessment: ReadinessAssessment): string {
@@ -49,9 +52,10 @@ export function RequestComposer() {
   const [packageError, setPackageError] = useState<string | null>(null);
   const [showSummaryPreview, setShowSummaryPreview] = useState(false);
 
-  const handleStartRequest = async () => {
-    const goal = value.trim();
+  const handleSubmit = async (goalToSubmit?: string) => {
+    const goal = (goalToSubmit || value).trim();
     if (!goal) return;
+    if (goalToSubmit) setValue(goalToSubmit);
 
     setLoading(true);
     setError(null);
@@ -125,21 +129,26 @@ export function RequestComposer() {
 
   return (
     <div className="space-y-6">
-      {/* Suggestions */}
-      <div className="flex flex-wrap gap-2">
-        {suggestions.map((suggestion) => (
-          <button
-            key={suggestion}
-            type="button"
-            onClick={() => {
-              setValue(suggestion);
-              setError(null);
-            }}
-            className="rounded-full border border-[#dddcd6] bg-white px-3 py-1.5 text-xs font-medium text-[#667085] transition hover:border-[#b9c9ea] hover:text-[#245fce]"
-          >
-            {suggestion}
-          </button>
-        ))}
+      {/* Quick Suggestions */}
+      <div>
+        <label className="text-xs font-semibold uppercase tracking-wider text-[#7a8494]">
+          Quick Suggestions
+        </label>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {suggestions.map((suggestion) => (
+            <button
+              key={suggestion}
+              type="button"
+              onClick={() => {
+                setValue(suggestion);
+                handleSubmit(suggestion);
+              }}
+              className="rounded-full border border-[#dddcd6] bg-white px-3 py-1.5 text-xs font-medium text-[#667085] transition hover:border-[#b9c9ea] hover:text-[#245fce]"
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Input box */}
@@ -155,12 +164,16 @@ export function RequestComposer() {
           className="w-full resize-none bg-transparent px-3 py-2 text-[15px] leading-6 outline-none placeholder:text-[#a2a8b2]"
         />
         <div className="flex items-center justify-between gap-3 border-t border-[#efede8] px-2 pt-2">
-          <span className="text-xs text-[#8c94a1]">
-            Evidence is verified against local documents
-          </span>
+          <Link
+            href="/documents"
+            className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-semibold text-[#768092] hover:bg-[#f5f4f0]"
+          >
+            <Icon name="upload" className="h-4 w-4" />
+            Manage vault files
+          </Link>
           <button
             disabled={!value.trim() || loading}
-            onClick={handleStartRequest}
+            onClick={() => handleSubmit()}
             className="flex items-center gap-2 rounded-xl bg-[#246bfd] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#1f61e7] disabled:cursor-not-allowed disabled:opacity-40"
           >
             {loading ? (
@@ -296,7 +309,7 @@ export function RequestComposer() {
                                   className="rounded border border-[#fdba74] bg-white px-2 py-1 text-[11px]"
                                 >
                                   <span className="text-[#9a3412] font-semibold">
-                                    "{v.value}"
+                                    &ldquo;{v.value}&rdquo;
                                   </span>{" "}
                                   <span className="text-[#9ca3af]">
                                     (source: {v.source_document})
@@ -391,7 +404,7 @@ export function RequestComposer() {
                                 className="rounded bg-[#f0fdf4] px-2.5 py-1.5 text-[11px] text-[#166534]"
                               >
                                 <span className="font-semibold">{ev.field}:</span>{" "}
-                                <span>"{ev.value}"</span>{" "}
+                                <span>&ldquo;{ev.value}&rdquo;</span>{" "}
                                 <span className="text-[#65a30d]">
                                   (from {ev.source_document}
                                   {ev.extraction_method && ev.extraction_method !== "native_text" ? ` · ${ev.extraction_method}` : ""}
@@ -405,6 +418,32 @@ export function RequestComposer() {
                     ))}
                   </div>
                 </div>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Recommended Next Actions */}
+          {assessment.recommended_next_actions && assessment.recommended_next_actions.length > 0 ? (
+            <div className="rounded-2xl border border-[#e2e8f0] bg-[#f8fafc] p-5">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-[#475569]">
+                Recommended Actions
+              </h4>
+              <ul className="mt-3 space-y-2">
+                {assessment.recommended_next_actions.map((act, idx) => (
+                  <li key={idx} className="flex items-start gap-2.5 text-xs text-[#475569]">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-[#246bfd] shrink-0" />
+                    <span>{act}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-4 flex gap-3">
+                <Link
+                  href="/documents"
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#246bfd] px-4 py-2 text-xs font-semibold text-white hover:bg-[#1f61e7]"
+                >
+                  <Icon name="upload" className="h-3.5 w-3.5" />
+                  Upload missing documents
+                </Link>
               </div>
             </div>
           ) : null}
@@ -531,4 +570,3 @@ export function RequestComposer() {
     </div>
   );
 }
-

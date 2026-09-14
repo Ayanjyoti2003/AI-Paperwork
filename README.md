@@ -285,8 +285,9 @@ Paperwork Agent maintains a strict safety boundary:
 
 ## 11. Project Structure
 
-```text
-paperwork-agent/
+
+`	ext
+AI-Paperwork/
 ├── backend/
 │   ├── app/
 │   │   ├── __init__.py
@@ -294,6 +295,7 @@ paperwork-agent/
 │   │   ├── api.py                 # FastAPI REST API (upload, assess, package endpoints)
 │   │   ├── prompts.py             # System prompt and core behavioral guidelines
 │   │   ├── schemas.py             # Pydantic models (ReadinessAssessment, DocumentFact, etc.)
+│   │   ├── workflow_generator.py  # Optional dynamic workflow generator
 │   │   ├── ocr/                   # Optical Character Recognition provider subsystem
 │   │   │   ├── __init__.py        # Exports extract_document_ocr, providers, exceptions
 │   │   │   ├── base.py            # OCRProvider base class and data models (OCRResult)
@@ -315,9 +317,9 @@ paperwork-agent/
 │   │   ├── __init__.py
 │   │   ├── conftest.py            # Pytest configuration and sys.path fixtures
 │   │   ├── test_agent.py          # Strands agent initialization and observability tests (20 tests)
-│   │   ├── test_api.py            # FastAPI endpoints, security, and upload tests (18 tests)
+│   │   ├── test_api.py            # FastAPI endpoints, security, and upload tests (21 tests)
 │   │   ├── test_ocr.py            # OCR extraction, provenance, and Textract tests (17 tests)
-│   │   └── test_tools.py          # Document search, fact extraction, verification tests (27 tests)
+│   │   └── test_tools.py          # Document search, fact extraction, verification tests (28 tests)
 │   ├── demo.py                    # Standalone deterministic workflow demonstration script
 │   ├── run_agent.py               # Interactive terminal CLI agent runner
 │   ├── requirements.txt           # Python backend dependencies
@@ -350,7 +352,7 @@ paperwork-agent/
 ├── README.md                      # Primary repository documentation
 ├── LICENSE                        # MIT License
 └── .gitignore                     # Git ignore rules
-```
+`
 
 ---
 

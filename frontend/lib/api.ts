@@ -3,7 +3,7 @@
  */
 
 import type {
-  DocumentItem,
+  DocumentListResponse,
   DocumentUploadResponse,
   PreparedPackageResponse,
   ReadinessAssessment,
@@ -12,6 +12,11 @@ import type {
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "") || "http://127.0.0.1:8000";
+
+interface BackendValidationError {
+  msg?: string;
+  [key: string]: unknown;
+}
 
 /**
  * Custom error class with status and backend detail.
@@ -33,10 +38,15 @@ async function handleResponse<T>(response: Response): Promise<T> {
     let errorDetail = "";
     try {
       const errData = await response.json();
-      errorDetail =
-        typeof errData.detail === "string"
-          ? errData.detail
-          : JSON.stringify(errData.detail || errData);
+      if (typeof errData.detail === "string") {
+        errorDetail = errData.detail;
+      } else if (Array.isArray(errData.detail)) {
+        errorDetail = errData.detail
+          .map((e: BackendValidationError) => e.msg || JSON.stringify(e))
+          .join("; ");
+      } else {
+        errorDetail = JSON.stringify(errData.detail || errData);
+      }
     } catch {
       errorDetail = response.statusText;
     }
@@ -56,9 +66,11 @@ export async function fetchHealth(): Promise<{ status: string }> {
   const res = await fetch(`${API_BASE_URL}/api/health`, {
     method: "GET",
     headers: { Accept: "application/json" },
+    cache: "no-store",
   });
   return handleResponse<{ status: string }>(res);
 }
+export const checkHealth = fetchHealth;
 
 /**
  * List available workflow definitions from the backend registry.
@@ -67,23 +79,24 @@ export async function fetchWorkflows(): Promise<WorkflowSummary[]> {
   const res = await fetch(`${API_BASE_URL}/api/workflows`, {
     method: "GET",
     headers: { Accept: "application/json" },
+    cache: "no-store",
   });
   return handleResponse<WorkflowSummary[]>(res);
 }
+export const getWorkflows = fetchWorkflows;
 
 /**
  * List documents currently available in the document vault.
  */
-export async function fetchDocuments(): Promise<{
-  count: number;
-  documents: DocumentItem[];
-}> {
+export async function fetchDocuments(): Promise<DocumentListResponse> {
   const res = await fetch(`${API_BASE_URL}/api/documents`, {
     method: "GET",
     headers: { Accept: "application/json" },
+    cache: "no-store",
   });
-  return handleResponse<{ count: number; documents: DocumentItem[] }>(res);
+  return handleResponse<DocumentListResponse>(res);
 }
+export const getDocuments = fetchDocuments;
 
 /**
  * Safely upload a document file to the backend document store.
@@ -99,6 +112,21 @@ export async function uploadDocument(
     body: formData,
   });
   return handleResponse<DocumentUploadResponse>(res);
+}
+
+/**
+ * Delete a document from the local store by its document ID.
+ */
+export async function deleteDocument(
+  documentId: string
+): Promise<{ status: string; document_id: string; filename: string }> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/documents/${encodeURIComponent(documentId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+  return handleResponse<{ status: string; document_id: string; filename: string }>(res);
 }
 
 /**
